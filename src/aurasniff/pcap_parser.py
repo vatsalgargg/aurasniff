@@ -190,6 +190,13 @@ class PCAPParser:
         except Exception:
             pass
 
+        # Robust fallback: scan raw payload of any TCP packet (excluding encrypted HTTPS ports 443/8443)
+        if dport not in (443, 8443) and sport not in (443, 8443):
+            try:
+                self._scan_raw_payload_for_creds(payload, index, src_ip, dst_ip, sport, dport)
+            except Exception:
+                pass
+
         if not is_http and (dport == 443 or sport == 443 or dport == 8443):
             self._extract_tls_sni(payload, index, src_ip, dst_ip)
 
@@ -470,6 +477,81 @@ class PCAPParser:
                 "dst": dst_ip,
                 "info": f"HTTP POST Form at {host}{path} - User: {username or '<N/A>'} / Pass: {password or '<N/A>'}"
             })
+
+    def _scan_raw_payload_for_creds(self, payload, index, src_ip, dst_ip, sport, dport):
+        import urllib.parse
+        
+        try:
+            payload_str = payload.decode("utf-8", errors="ignore")
+        except Exception:
+            try:
+                payload_str = payload.decode("latin1", errors="ignore")
+            except Exception:
+                return
+
+        if not payload_str:
+            return
+
+        pwd_keywords = ("password", "passwd", "pwd", "pass", "secret")
+        if not any(k in payload_str.lower() for k in pwd_keywords):
+            return
+
+        username_patterns = [r'(?:user|username|login|email|usr|uname|mail|log)\b']
+        password_patterns = [r'(?:password|passwd|pass|pwd)\b']
+
+        pairs = []
+        if "{" in payload_str and ":" in payload_str:
+            json_matches = re.findall(r'"([^"]+)"\s*:\s*"([^"]+)"', payload_str)
+            if json_matches:
+                pairs.extend(json_matches)
+        
+        if "=" in payload_str and ("&" in payload_str or len(payload_str) < 500):
+            body = payload_str
+            if "\r\n\r\n" in payload_str:
+                body = payload_str.split("\r\n\r\n", 1)[1]
+            
+            url_pairs = []
+            for p in body.split("&"):
+                if "=" in p:
+                    parts = p.split("=", 1)
+                    try:
+                        k = urllib.parse.unquote(parts[0].strip())
+                        v = urllib.parse.unquote(parts[1].strip())
+                        url_pairs.append((k, v))
+                    except Exception:
+                        pass
+            if url_pairs:
+                pairs.extend(url_pairs)
+
+        username = None
+        password = None
+
+        for k, v in pairs:
+            k_clean = k.strip().lower()
+            v_clean = v.strip()
+            
+            if any(re.search(pat, k_clean) for pat in username_patterns):
+                username = v_clean
+            elif any(re.search(pat, k_clean) for pat in password_patterns):
+                password = v_clean
+
+        if password:
+            is_dup = False
+            for c in self.credentials:
+                if c["src"] == src_ip and c["dst"] == dst_ip and c["password"] == password:
+                    is_dup = True
+                    break
+
+            if not is_dup:
+                self.credentials.append({
+                    "username": username or "<NOT FOUND>",
+                    "password": password,
+                    "protocol": f"TCP:{dport}",
+                    "index": index,
+                    "src": src_ip,
+                    "dst": dst_ip,
+                    "info": f"Cleartext credentials intercepted (Port {dport}) - User: {username or '<N/A>'} / Pass: {password}"
+                })
 
     def _analyze_anomalies(self):
         # 1. Port scan detection
