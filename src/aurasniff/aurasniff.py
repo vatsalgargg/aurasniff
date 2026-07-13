@@ -315,6 +315,10 @@ def handle_query(parser, query):
         run_local_fallback_query(parser, query)
 
 def run_shell(parser):
+    # Render dashboard first for context
+    stats = parser.get_summary_statistics()
+    terminal_ui.render_dashboard(stats, parser)
+    
     terminal_ui.render_shell_banner()
     api_key = get_api_key()
     if not api_key:
@@ -389,6 +393,12 @@ def run_shell(parser):
             break
 
 def main():
+    # If the first argument looks like a pcap file or exists, default to 'shell' subcommand
+    if len(sys.argv) > 1 and sys.argv[1] not in ("-h", "--help", "config", "analyze", "query", "shell"):
+        arg = sys.argv[1]
+        if arg.endswith((".pcap", ".pcapng", ".cap")) or os.path.exists(arg):
+            sys.argv.insert(1, "shell")
+
     parser = argparse.ArgumentParser(
         description="AuraSniff: Interactive Command-Line PCAP Traffic & Security Analyzer",
         formatter_class=argparse.RawDescriptionHelpFormatter
