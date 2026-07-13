@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurasniff"
+version = "0.1.0"
+authors = [
+    { name = "Vatsal Garg", email = "vatsal@example.com" }
+]
+description = "A premium interactive CLI network traffic analyzer with Gemini AI integration"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = [
+    "scapy>=2.5.0",
+    "rich>=13.0.0",
+    "google-genai>=1.0.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/vatsalgargg/aurasniff"
+Bug-Tracker = "https://github.com/vatsalgargg/aurasniff/issues"
+
+[project.scripts]
+aurasniff = "aurasniff.aurasniff:main"

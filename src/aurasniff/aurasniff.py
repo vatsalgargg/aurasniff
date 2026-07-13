@@ -18,9 +18,9 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.prompt import Prompt
 
-# Import local modules
-from pcap_parser import PCAPParser
-import terminal_ui
+# Import local modules (relative package imports)
+from .pcap_parser import PCAPParser
+from . import terminal_ui
 
 console = Console()
 CONFIG_FILE = Path.home() / ".aurasniff.json"
@@ -53,11 +53,9 @@ def get_api_key():
     """
     Retrieves the Gemini API Key from environment or configuration
     """
-    # 1. Check environment
     env_key = os.environ.get("GEMINI_API_KEY")
     if env_key:
         return env_key
-    # 2. Check config file
     config = load_config()
     return config.get("gemini_api_key")
 
@@ -80,14 +78,12 @@ def run_parser_with_progress(filepath):
         TaskProgressColumn(),
         console=console
     ) as progress:
-        # Since we don't know the exact packet count, we display a spinner and increment count
         task = progress.add_task("[cyan]Parsing packets...", total=None)
         
         def update_progress(count):
             progress.update(task, description=f"[cyan]Parsed {count:,} packets...", advance=500)
 
         parser.parse(progress_callback=update_progress)
-        # Final update
         progress.update(task, description=f"[green]Successfully parsed {parser.total_packets:,} packets!")
 
     return parser
@@ -105,7 +101,6 @@ def filter_packets_locally(parser, query_dict):
     text = query_dict.get("text")
 
     for pkt in parser.packets_summary:
-        # Match source IP / Hostname
         if src:
             src_ip_match = (src.lower() in pkt["src"].lower())
             src_host_match = False
@@ -114,7 +109,6 @@ def filter_packets_locally(parser, query_dict):
             if not (src_ip_match or src_host_match):
                 continue
 
-        # Match destination IP / Hostname
         if dst:
             dst_ip_match = (dst.lower() in pkt["dst"].lower())
             dst_host_match = False
@@ -123,20 +117,16 @@ def filter_packets_locally(parser, query_dict):
             if not (dst_ip_match or dst_host_match):
                 continue
 
-        # Match protocol
         if proto and proto.lower() != pkt["proto"].lower():
             continue
 
-        # Match port
         if port:
-            # Check info field or details for port numbers (a rough CLI filter)
             port_str = f":{port}"
             sport_str = f" {port} ->"
             dport_str = f"-> {port}"
             if not (port_str in pkt["info"] or sport_str in pkt["info"] or dport_str in pkt["info"]):
                 continue
 
-        # Match text in summary info
         if text and text.lower() not in pkt["info"].lower() and text.lower() not in pkt["proto"].lower():
             continue
 
@@ -150,7 +140,6 @@ def run_local_fallback_query(parser, query):
     """
     query_lower = query.lower()
     
-    # 1. Credentials
     if "cred" in query_lower or "pass" in query_lower or "login" in query_lower or "user" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying extracted credentials...[/]")
         if parser.credentials:
@@ -167,7 +156,6 @@ def run_local_fallback_query(parser, query):
             console.print("No credentials found in packet payloads.")
         return
 
-    # 2. Suspicious Traffic / Alerts
     if "suspect" in query_lower or "suspicious" in query_lower or "alert" in query_lower or "threat" in query_lower or "attack" in query_lower or "anomaly" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying security alerts...[/]")
         if parser.alerts:
@@ -183,25 +171,21 @@ def run_local_fallback_query(parser, query):
             console.print("No alerts or security anomalies detected.")
         return
 
-    # 3. DNS
     if "dns" in query_lower or "domain" in query_lower or "lookup" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying DNS log...[/]")
         terminal_ui.render_dns_table(parser.dns_queries[:40])
         return
 
-    # 4. HTTP
     if "http" in query_lower or "web" in query_lower or "url" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying HTTP log...[/]")
         terminal_ui.render_http_table(parser.http_traffic[:40])
         return
 
-    # 5. IP Address search
     ip_match = re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', query)
     if ip_match:
         ip = ip_match.group(0)
         console.print(f"[bold yellow]Running Local Fallback: Filtering for IP {ip}...[/]")
         filtered = filter_packets_locally(parser, {"src": ip}) + filter_packets_locally(parser, {"dst": ip})
-        # Remove duplicates preserving order
         seen = set()
         unique_filtered = []
         for p in filtered:
@@ -211,7 +195,6 @@ def run_local_fallback_query(parser, query):
         terminal_ui.render_packets_list(unique_filtered[:50], parser)
         return
 
-    # 6. Generic Text Search on Info field
     console.print(f"[bold yellow]Running Local Fallback: Searching packets for '{query}'...[/]")
     filtered = filter_packets_locally(parser, {"text": query})
     if filtered:
@@ -231,29 +214,16 @@ def query_gemini(api_key, parser, user_prompt):
         console.print("[bold red]Error:[/] The google-genai library is missing. Install it using `pip install google-genai`.")
         return None, None
 
-    # Compile a structured summary of the PCAP data to fit into the context window
     stats = parser.get_summary_statistics()
-    
-    # DHCP Map
     dhcp_summary = [f"{ip} -> {name}" for ip, name in parser.ip_to_hostname.items()]
-    
-    # Alerts
     alerts_summary = [f"[{a['severity']}] {a['type']}: {a['description']}" for a in parser.alerts]
     
-    # Top Conversations
     sorted_convs = sorted(parser.connections.items(), key=lambda x: x[1]["bytes"], reverse=True)[:10]
-    convs_summary = [f"{s} -> {d} via {p} ({c['packets']} pkts, {format_size(c['bytes'])})" for (s, d, p), c in sorted_convs]
+    convs_summary = [f"{s} -> {d} via {p} ({c['packets']} pkts, {terminal_ui.format_size(c['bytes'])})" for (s, d, p), c in sorted_convs]
 
-    # Credentials
     creds_summary = [f"{c['protocol']} creds found at {c['src']} -> {c['dst']}: User: {c['username']} / Pass: {c['password']}" for c in parser.credentials]
-
-    # DNS Logs (sample top or recent)
     dns_summary = [f"{dns['src']} lookup '{dns['qname']}' -> '{dns['answers']}'" for dns in parser.dns_queries[:25]]
-
-    # HTTP Logs (sample recent)
     http_summary = [f"{http['src']} -> {http['host']} HTTP {http['method']} {http['path']} [Status: {http['status']}]" for http in parser.http_traffic[:25]]
-
-    # TLS SNI Logs (sample recent)
     tls_summary = [f"{tls['src']} -> TLS Client Hello SNI: {tls['host']}" for tls in parser.tls_traffic[:25]]
 
     system_instruction = f"""You are AuraSniff AI, a premium network security analysis assistant.
@@ -278,7 +248,7 @@ Do not write anything else in that JSON block. If no packet list needs to be sho
 Capture Summary details:
 - File Name: {os.path.basename(parser.filepath)}
 - Total Packets: {stats['total_packets']:,}
-- Total Bytes: {format_size(stats['total_bytes'])}
+- Total Bytes: {terminal_ui.format_size(stats['total_bytes'])}
 - Duration: {stats['duration']} seconds
 - Protocol Distribution: {stats['protocols_count']}
 - Security Alerts: {alerts_summary}
@@ -293,8 +263,6 @@ Capture Summary details:
     client = genai.Client(api_key=api_key)
     
     try:
-        # Use gemini-2.5-flash as the standard model (fast, high capabilities, low latency)
-        # Note: the user's environment has google-genai installed, so this works out-of-the-box.
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=user_prompt,
@@ -309,13 +277,11 @@ Capture Summary details:
 
     text_response = response.text
     
-    # Extract JSON filter block
     json_filter = None
     json_match = re.search(r'```json\s*(\{.*?\})\s*```', text_response, re.DOTALL)
     if json_match:
         try:
             json_filter = json.loads(json_match.group(1))
-            # Remove the JSON code block from the user-facing text response to clean it up
             text_response = text_response.replace(json_match.group(0), "").strip()
         except Exception:
             pass
@@ -323,16 +289,12 @@ Capture Summary details:
     return text_response, json_filter
 
 def handle_query(parser, query):
-    """
-    Handles a query (either AI or local fallback).
-    """
     api_key = get_api_key()
     
     if not api_key:
         run_local_fallback_query(parser, query)
         return
 
-    # Query with Gemini
     with console.status("[cyan]Asking AuraSniff AI...", spinner="dots"):
         explanation, filter_dict = query_gemini(api_key, parser, query)
 
@@ -353,14 +315,11 @@ def handle_query(parser, query):
         run_local_fallback_query(parser, query)
 
 def run_shell(parser):
-    """
-    Interactive shell mode.
-    """
     terminal_ui.render_shell_banner()
     api_key = get_api_key()
     if not api_key:
         console.print("[bold yellow]Warning:[/] No Gemini API key configured. Commands will run in local rule-based fallback mode.")
-        console.print("To unlock full AI capabilities, exit and run: `python aurasniff.py config set-key <API_KEY>`\n")
+        console.print("To unlock full AI capabilities, exit and run: `aurasniff config set-key <API_KEY>`\n")
 
     while True:
         try:
@@ -383,14 +342,12 @@ def run_shell(parser):
                 console.print("  [cyan]<any text>[/]       - Ask AuraSniff AI a question about the capture")
                 continue
 
-            # Check for direct detail packet command
             detail_match = re.match(r'^detail\s+(\d+)$', user_input, re.IGNORECASE)
             if detail_match:
                 index = int(detail_match.group(1))
                 terminal_ui.render_packet_detail(index, parser.filepath)
                 continue
 
-            # Short command shortcuts
             if user_input.lower() == "dns":
                 terminal_ui.render_dns_table(parser.dns_queries[:50])
                 continue
@@ -425,7 +382,6 @@ def run_shell(parser):
                     console.print("No alerts found.")
                 continue
 
-            # Pass generic questions to query handler
             handle_query(parser, user_input)
 
         except (KeyboardInterrupt, EOFError):
@@ -440,7 +396,6 @@ def main():
     
     subparsers = parser.add_subparsers(dest="command", help="Subcommands")
 
-    # config command
     config_parser = subparsers.add_parser("config", help="Manage API key configuration")
     config_sub = config_parser.add_subparsers(dest="config_action", help="Actions")
     
@@ -449,16 +404,13 @@ def main():
     
     config_sub.add_parser("show", help="Show current configuration")
 
-    # analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Scan capture and show dashboard")
     analyze_parser.add_argument("pcap_file", help="Path to PCAP/PCAPNG file")
 
-    # query command
     query_parser = subparsers.add_parser("query", help="Ask a single question about the capture")
     query_parser.add_argument("pcap_file", help="Path to PCAP/PCAPNG file")
     query_parser.add_argument("question", help="Natural language question")
 
-    # shell command
     shell_parser = subparsers.add_parser("shell", help="Launch interactive AI prompt shell")
     shell_parser.add_argument("pcap_file", help="Path to PCAP/PCAPNG file")
 
@@ -468,7 +420,6 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # Handle Config
     if args.command == "config":
         if args.config_action == "set-key":
             config = load_config()
@@ -484,26 +435,22 @@ def main():
                 masked = key[:6] + "..." + key[-4:] if len(key) > 10 else "..."
                 console.print(f"Gemini API Key: [green]{masked}[/]")
             else:
-                console.print("Gemini API Key: [red]Not Set[/] (Use `python aurasniff.py config set-key <KEY>`)")
+                console.print("Gemini API Key: [red]Not Set[/] (Use `aurasniff config set-key <KEY>`)")
         else:
             config_parser.print_help()
         sys.exit(0)
 
-    # All other commands require a PCAP file
     pcap_path = getattr(args, "pcap_file", None)
     if not pcap_path:
         console.print("[bold red]Error:[/] PCAP file path is required.")
         sys.exit(1)
 
-    # Check file exists
     if not os.path.exists(pcap_path):
         console.print(f"[bold red]Error:[/] PCAP file not found at '{pcap_path}'")
         sys.exit(1)
 
-    # Run parsing
     pcap_parser_inst = run_parser_with_progress(pcap_path)
 
-    # Route Subcommands
     if args.command == "analyze":
         stats = pcap_parser_inst.get_summary_statistics()
         terminal_ui.render_dashboard(stats, pcap_parser_inst)

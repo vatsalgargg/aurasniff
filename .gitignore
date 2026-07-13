@@ -17,3 +17,14 @@ Thumbs.db
 
 # User Config
 .aurasniff.json
+
+# Packaging build outputs
+dist/
+build/
+*.egg-info/
+src/*.egg-info/
+
+# Ignore packet captures by default, except our mock test capture
+*.pcap
+*.pcapng
+!test_capture.pcap

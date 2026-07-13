@@ -44,9 +44,6 @@ class PCAPParser:
         if not os.path.exists(self.filepath):
             raise FileNotFoundError(f"PCAP file not found: {self.filepath}")
 
-        # Determine file size for progress display
-        file_size = os.path.getsize(self.filepath)
-        
         packet_count = 0
         
         # Open the file using Scapy's PcapReader for memory efficiency
@@ -60,7 +57,7 @@ class PCAPParser:
                 
                 try:
                     self._process_packet(packet, packet_count)
-                except Exception as e:
+                except Exception:
                     # Ignore malformed packets but continue parsing
                     pass
 
@@ -114,7 +111,6 @@ class PCAPParser:
         if packet.haslayer(scapy.ARP):
             arp = packet[scapy.ARP]
             proto_name = "ARP"
-            # arp.op 1 = who-has (request), 2 = is-at (reply)
             if arp.op == 2:
                 self.arp_tracker[arp.psrc].add(arp.hwsrc)
             info = f"ARP - {arp.psrc} is at {arp.hwsrc}"
@@ -178,16 +174,13 @@ class PCAPParser:
         })
 
     def _process_tcp_payload(self, packet, index, src_ip, dst_ip, sport, dport):
-        # Extract TCP payload
         tcp = packet[scapy.TCP]
         payload = bytes(tcp.payload)
         if not payload:
             return
 
-        # Check for HTTP traffic
         is_http = False
         try:
-            # Simple check if it looks like HTTP request or response
             if payload.startswith((b"GET ", b"POST ", b"PUT ", b"DELETE ", b"HEAD ", b"OPTIONS ", b"PATCH ")):
                 is_http = True
                 self._parse_http_request(payload, index, src_ip, dst_ip, sport, dport)
@@ -197,11 +190,9 @@ class PCAPParser:
         except Exception:
             pass
 
-        # Check for SSL/TLS Client Hello to get SNI (Server Name Indication)
         if not is_http and (dport == 443 or sport == 443 or dport == 8443):
             self._extract_tls_sni(payload, index, src_ip, dst_ip)
 
-        # Scan for cleartext FTP logins
         if dport == 21 or sport == 21:
             try:
                 line = payload.decode("utf-8", errors="ignore").strip()
@@ -218,7 +209,6 @@ class PCAPParser:
                     })
                 elif line.startswith("PASS "):
                     password = line[5:]
-                    # Associate password with the last FTP user from this source IP
                     for cred in reversed(self.credentials):
                         if cred["protocol"] == "FTP" and cred["src"] == src_ip and cred["password"] == "<WAITING FOR PASS>":
                             cred["password"] = password
@@ -227,11 +217,9 @@ class PCAPParser:
             except Exception:
                 pass
 
-        # Scan SMTP/POP3/IMAP cleartext credentials
         if dport in (25, 587, 110, 143):
             try:
                 line = payload.decode("utf-8", errors="ignore").strip()
-                # SMTP auth login base64 decoding (common pattern)
                 if dport in (25, 587) and "AUTH LOGIN" in line:
                     self.credentials.append({
                         "username": "<BASE64 ENCODED>",
@@ -242,7 +230,6 @@ class PCAPParser:
                         "dst": dst_ip,
                         "info": "SMTP Auth Login initiated"
                     })
-                # POP3 login
                 elif dport == 110:
                     if line.upper().startswith("USER "):
                         self.credentials.append({
@@ -261,7 +248,6 @@ class PCAPParser:
                                 cred["password"] = password
                                 cred["info"] = f"POP3 User: {cred['username']} / Pass: {password}"
                                 break
-                # IMAP login
                 elif dport == 143:
                     match = re.search(r'\bLOGIN\s+"?([^"\s]+)"?\s+"?([^"\s]+)"?', line, re.IGNORECASE)
                     if match:
@@ -284,25 +270,22 @@ class PCAPParser:
         if not payload:
             return
 
-        # 1. DNS Parsing
         if packet.haslayer(scapy.DNS):
             dns = packet[scapy.DNS]
-            if dns.qd:  # Query Record
+            if dns.qd:
                 qname = dns.qd.qname.decode("utf-8", errors="ignore").rstrip(".")
                 qtype = dns.qd.qtype
-                # Convert qtype code to string name
                 qtype_name = scapy.dnstypes.get(qtype, f"TYPE{qtype}")
                 
-                # Check answers if it's a response
                 answers = []
                 if dns.an:
                     for i in range(dns.ancount):
                         ans = dns.an[i]
-                        if ans.type == 1: # A record (IP)
+                        if ans.type == 1:
                             answers.append(ans.rdata)
-                        elif ans.type == 28: # AAAA record (IPv6)
+                        elif ans.type == 28:
                             answers.append(ans.rdata)
-                        elif ans.type == 5: # CNAME
+                        elif ans.type == 5:
                             answers.append(ans.rdata.decode("utf-8", errors="ignore").rstrip("."))
 
                 self.dns_queries.append({
@@ -314,14 +297,10 @@ class PCAPParser:
                     "answers": ", ".join(answers) if answers else "N/A"
                 })
 
-        # 2. DHCP Parsing (for hostname identification)
         if packet.haslayer(scapy.DHCP) or (sport in (67, 68) and dport in (67, 68)):
             try:
-                # Iterate options to extract hostname (option 12) or requested IP (option 50)
-                # Options are stored as tuple list in scapy
                 dhcp_options = packet[scapy.DHCP].options if packet.haslayer(scapy.DHCP) else []
                 if not dhcp_options and packet.haslayer(scapy.BOOTP):
-                    # Sometimes Scapy wraps DHCP inside BOOTP
                     bootp = packet[scapy.BOOTP]
                     if bootp.haslayer(scapy.DHCP):
                         dhcp_options = bootp[scapy.DHCP].options
@@ -343,7 +322,6 @@ class PCAPParser:
                             req_ip = str(opt_val)
 
                 if hostname:
-                    # Clean up hostname
                     hostname = hostname.strip().rstrip("\x00")
                     if req_ip:
                         self.ip_to_hostname[req_ip] = hostname
@@ -354,7 +332,6 @@ class PCAPParser:
 
     def _parse_http_request(self, payload, index, src_ip, dst_ip, sport, dport):
         try:
-            # Decode request
             req_text = payload.decode("utf-8", errors="ignore")
             lines = req_text.split("\r\n")
             if not lines:
@@ -365,12 +342,10 @@ class PCAPParser:
                 return
             method, path = req_line[0], req_line[1]
 
-            # Parse headers
             headers = {}
             body_start_idx = -1
             for i, line in enumerate(lines[1:]):
                 if line == "":
-                    # Empty line separates headers from body
                     body_start_idx = i + 2
                     break
                 if ":" in line:
@@ -381,7 +356,6 @@ class PCAPParser:
             user_agent = headers.get("user-agent", "N/A")
             content_type = headers.get("content-type", "")
 
-            # Log HTTP request
             self.http_traffic.append({
                 "index": index,
                 "method": method,
@@ -393,7 +367,6 @@ class PCAPParser:
                 "status": "N/A"
             })
 
-            # Check for credentials in HTTP POST payloads
             if method == "POST" and body_start_idx != -1 and body_start_idx < len(lines):
                 body = "\r\n".join(lines[body_start_idx:])
                 self._scan_http_body_for_creds(body, index, src_ip, dst_ip, host, path)
@@ -412,7 +385,6 @@ class PCAPParser:
                 return
             status_code = res_line[1]
 
-            # Match response status back to the last request from dst_ip to src_ip
             for http_req in reversed(self.http_traffic):
                 if http_req["src"] == dst_ip and http_req["dst"] == src_ip and http_req["status"] == "N/A":
                     http_req["status"] = status_code
@@ -421,28 +393,21 @@ class PCAPParser:
             pass
 
     def _extract_tls_sni(self, payload, index, src_ip, dst_ip):
-        """
-        Extends simple binary parser to find SNI in TLS Client Hello packets.
-        """
         try:
             if len(payload) > 43 and payload[0] == 0x16 and payload[1] == 0x03 and payload[5] == 0x01:
-                # Move to session ID
                 pos = 43
                 if pos < len(payload):
                     session_id_len = payload[pos]
                     pos += 1 + session_id_len
                 
-                # Cipher suites
                 if pos + 2 < len(payload):
                     cipher_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
                     pos += 2 + cipher_len
 
-                # Compression methods
                 if pos < len(payload):
                     comp_len = payload[pos]
                     pos += 1 + comp_len
 
-                # Extensions
                 if pos + 2 < len(payload):
                     ext_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
                     pos += 2
@@ -453,16 +418,14 @@ class PCAPParser:
                         ext_data_len = int.from_bytes(payload[pos+2:pos+4], byteorder="big")
                         pos += 4
                         
-                        if ext_type == 0: # Server Name extension
-                            # Server name list length
+                        if ext_type == 0:
                             if pos + 2 < len(payload):
                                 sni_list_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
                                 name_type = payload[pos+2]
-                                if name_type == 0: # Hostname
+                                if name_type == 0:
                                     name_len = int.from_bytes(payload[pos+3:pos+5], byteorder="big")
                                     sni = payload[pos+5:pos+5+name_len].decode("utf-8", errors="ignore")
                                     
-                                    # Log SNI
                                     self.tls_traffic.append({
                                         "index": index,
                                         "host": sni,

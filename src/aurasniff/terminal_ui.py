@@ -48,9 +48,6 @@ def make_horizontal_bar(val, max_val, width=15):
     return bar
 
 def render_dashboard(stats, parser):
-    """
-    Renders a complete, gorgeous terminal dashboard for PCAP analysis.
-    """
     # Header
     console.print(Panel(
         Align.center(
@@ -87,7 +84,7 @@ def render_dashboard(stats, parser):
     sorted_protos = sorted(stats["protocols_count"].items(), key=lambda x: x[1], reverse=True)
     max_proto_count = sorted_protos[0][1] if sorted_protos else 1
 
-    for proto, count in sorted_protos[:6]:  # Show top 6
+    for proto, count in sorted_protos[:6]:
         pct = (count / total_pkts) * 100
         bar = make_horizontal_bar(count, max_proto_count, width=10)
         proto_table.add_row(
@@ -114,9 +111,8 @@ def render_dashboard(stats, parser):
     sorted_convs = sorted(parser.connections.items(), key=lambda x: x[1]["bytes"], reverse=True)
     max_bytes = sorted_convs[0][1]["bytes"] if sorted_convs else 1
 
-    for flow, data in sorted_convs[:5]:  # Show top 5
+    for flow, data in sorted_convs[:5]:
         src, dst, proto = flow
-        # Try to resolve to DHCP hostnames
         src_name = f"{src} ({parser.ip_to_hostname[src]})" if src in parser.ip_to_hostname else src
         dst_name = f"{dst} ({parser.ip_to_hostname[dst]})" if dst in parser.ip_to_hostname else dst
         
@@ -131,7 +127,7 @@ def render_dashboard(stats, parser):
             Text(bar, style="yellow")
         )
 
-    console.print(Panel(conv_table, title="Top Connections (by volume)", border_style="yellow"))
+    console.print(Panel(conv_table, title="Top Conversations (by volume)", border_style="yellow"))
 
     # Credentials
     if parser.credentials:
@@ -142,7 +138,7 @@ def render_dashboard(stats, parser):
         cred_table.add_column("Destination")
         cred_table.add_column("Credentials Info")
 
-        for cred in parser.credentials[:5]:  # Limit 5
+        for cred in parser.credentials[:5]:
             cred_table.add_row(
                 str(cred["index"]),
                 cred["protocol"],
@@ -175,9 +171,6 @@ def render_dashboard(stats, parser):
         console.print(Panel(Text("Zero network anomalies or potential threats detected.", style="italic green"), title="🚨 Security Alerts & Anomalies Detected", border_style="green"))
 
 def render_packets_list(packets, parser):
-    """
-    Renders a formatted list of packets
-    """
     table = Table(show_header=True, header_style="bold blue", expand=True)
     table.add_column("#", justify="right", ratio=0.8)
     table.add_column("Time", ratio=1.2)
@@ -192,16 +185,13 @@ def render_packets_list(packets, parser):
         src = pkt["src"]
         dst = pkt["dst"]
         
-        # Add hostnames if resolved
         if src in parser.ip_to_hostname:
             src = f"{src} ({parser.ip_to_hostname[src]})"
         if dst in parser.ip_to_hostname:
             dst = f"{dst} ({parser.ip_to_hostname[dst]})"
 
-        # Format timestamp
         time_str = f"{pkt['time'] - parser.start_time:.4f}"
 
-        # Protocol specific formatting
         proto = pkt["proto"]
         proto_style = "bold white"
         if proto == "TCP":
@@ -228,9 +218,6 @@ def render_packets_list(packets, parser):
     console.print(table)
 
 def render_dns_table(dns_queries):
-    """
-    Renders a table of DNS lookups.
-    """
     table = Table(show_header=True, header_style="bold magenta", expand=True)
     table.add_column("Pkt #", justify="right")
     table.add_column("Queried Domain")
@@ -249,9 +236,6 @@ def render_dns_table(dns_queries):
     console.print(Panel(table, title="🔍 DNS Queries Log", border_style="magenta"))
 
 def render_http_table(http_traffic):
-    """
-    Renders a table of HTTP requests.
-    """
     table = Table(show_header=True, header_style="bold green", expand=True)
     table.add_column("Pkt #", justify="right")
     table.add_column("Method", justify="center")
@@ -275,9 +259,6 @@ def render_http_table(http_traffic):
     console.print(Panel(table, title="🌐 HTTP Traffic Log", border_style="green"))
 
 def render_hexdump(data):
-    """
-    Generates a gorgeous, side-by-side colorized hex and ASCII dump of payload bytes.
-    """
     if not data:
         return Text("No payload data.", style="dim italic")
 
@@ -285,19 +266,16 @@ def render_hexdump(data):
     length = len(data)
     
     for i in range(0, length, 16):
-        # 1. Address offset
         offset = f"{i:04x}  "
         result.append(offset, style="dim white")
         
-        # 2. Hex bytes
         hex_part = []
         ascii_part = []
         for j in range(16):
             if i + j < length:
                 val = data[i+j]
                 hex_part.append(f"{val:02x}")
-                # Colorize bytes based on ASCII character type
-                if 32 <= val <= 126: # printable
+                if 32 <= val <= 126:
                     ascii_part.append((chr(val), "cyan"))
                 elif val == 0:
                     ascii_part.append((".", "dim white"))
@@ -307,11 +285,9 @@ def render_hexdump(data):
                 hex_part.append("  ")
                 ascii_part.append((" ", "default"))
         
-        # Format hex output with spacing
         hex_str = " ".join(hex_part[:8]) + "  " + " ".join(hex_part[8:])
         result.append(hex_str.ljust(48) + "  |", style="bold white")
         
-        # 3. ASCII characters
         for char, style in ascii_part:
             result.append(char, style=style)
             
@@ -320,10 +296,6 @@ def render_hexdump(data):
     return result
 
 def render_packet_detail(index, filepath):
-    """
-    Performs lazy detailed decoding of a specific packet by opening the PCAP file,
-    extracting that packet, showing a Tree breakdown of layers, and a Hex dump.
-    """
     packet = None
     curr_idx = 0
     with scapy.PcapReader(filepath) as pcap_reader:
@@ -337,30 +309,24 @@ def render_packet_detail(index, filepath):
         console.print(f"[bold red]Error:[/] Packet #{index} not found in capture file.")
         return
 
-    # Header Panel
     console.print(Panel(
         Text(f"Detailed Packet Dissection: Packet #{index} (Size: {len(packet)} bytes)", style="bold white"),
         border_style="cyan"
     ))
 
-    # Layer Tree construction
     tree = Tree(f"[bold green]Packet #{index}[/]")
     
-    # Iterate through layers in scapy packet
     temp_pkt = packet
     while temp_pkt:
         layer_name = temp_pkt.__class__.__name__
         layer_info = []
         
-        # Extract fields
         for field in temp_pkt.fields_desc:
             val = temp_pkt.getfieldval(field.name)
-            # Format nicely
             if val is not None:
                 layer_info.append(f"{field.name}={val}")
         
         field_str = ", ".join(layer_info)
-        # Clean up string length if too long
         if len(field_str) > 100:
             field_str = field_str[:97] + "..."
             
@@ -370,16 +336,13 @@ def render_packet_detail(index, filepath):
     console.print(tree)
     console.print()
 
-    # Hex Dump of Raw Payload
     raw_bytes = bytes(packet)
-    # If TCP or UDP layer is present, extract application payload specifically
     payload_bytes = None
     if packet.haslayer(scapy.TCP):
         payload_bytes = bytes(packet[scapy.TCP].payload)
     elif packet.haslayer(scapy.UDP):
         payload_bytes = bytes(packet[scapy.UDP].payload)
 
-    # Print Hex Dumps
     console.print("[bold yellow]Raw Packet Hex/ASCII Dump:[/]")
     console.print(render_hexdump(raw_bytes))
     
