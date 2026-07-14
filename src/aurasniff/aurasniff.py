@@ -26,9 +26,7 @@ console = Console()
 CONFIG_FILE = Path.home() / ".aurasniff.json"
 
 def load_config():
-    """
-    Loads configuration (specifically the Gemini API key) from ~/.aurasniff.json
-    """
+    """Loads non-sensitive config (provider preference) from ~/.aurasniff.json."""
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r") as f:
@@ -38,9 +36,7 @@ def load_config():
     return {}
 
 def save_config(config):
-    """
-    Saves configuration to ~/.aurasniff.json
-    """
+    """Saves non-sensitive config to ~/.aurasniff.json."""
     try:
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)
@@ -49,15 +45,95 @@ def save_config(config):
         console.print(f"[bold red]Error saving config:[/] {e}")
         return False
 
-def get_api_key():
+# ── Secure Key Storage ─────────────────────────────────────────────────────────
+# API keys are stored in the OS keychain (Windows Credential Manager / macOS
+# Keychain / Linux Secret Service) via the `keyring` library.  The JSON config
+# file is only used as a fallback for headless / server environments where no
+# keychain daemon is available.  Keys are NEVER logged or printed in full.
+
+KEYRING_SERVICE = "aurasniff"
+
+_PROVIDER_ENV_VARS = {
+    "gemini": "GEMINI_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+_PROVIDER_DISPLAY = {
+    "gemini": "Gemini",
+    "claude": "Claude",
+    "openai": "GPT-4o",
+}
+
+_PROVIDER_COLORS = {
+    "gemini": "green",
+    "claude": "yellow",
+    "openai": "cyan",
+}
+
+def _store_key_secure(provider, api_key):
     """
-    Retrieves the Gemini API Key from environment or configuration
+    Store an API key securely.
+    Tries OS keychain first (keyring), falls back to JSON config file.
     """
-    env_key = os.environ.get("GEMINI_API_KEY")
+    try:
+        import keyring
+        keyring.set_password(KEYRING_SERVICE, provider, api_key)
+        return True
+    except Exception:
+        pass
+    # Fallback: plain JSON file (works on headless servers / CI)
+    config = load_config()
+    config[f"{provider}_api_key"] = api_key
+    return save_config(config)
+
+def _get_key_secure(provider):
+    """
+    Retrieve an API key for the given provider.
+    Priority: environment variable -> OS keychain -> JSON config file.
+    Keys are never stored in module-level globals or logged in plain text.
+    """
+    # 1. Environment variable — highest priority, ideal for CI/CD pipelines
+    env_key = os.environ.get(_PROVIDER_ENV_VARS.get(provider, ""))
     if env_key:
         return env_key
+
+    # 2. OS keychain — most secure for interactive desktop use
+    try:
+        import keyring
+        key = keyring.get_password(KEYRING_SERVICE, provider)
+        if key:
+            return key
+    except Exception:
+        pass
+
+    # 3. Fallback: plain JSON config file
     config = load_config()
-    return config.get("gemini_api_key")
+    return config.get(f"{provider}_api_key") or None
+
+def get_active_provider():
+    """
+    Returns (provider_name, api_key) for the configured default provider.
+    If the default has no key, auto-falls back to any available provider.
+    Returns (None, None) when no key is configured anywhere.
+    """
+    config  = load_config()
+    default = config.get("default_provider", "gemini")
+
+    key = _get_key_secure(default)
+    if key:
+        return default, key
+
+    # Auto-fallback to the next available provider
+    for provider in ("gemini", "claude", "openai"):
+        if provider == default:
+            continue
+        key = _get_key_secure(provider)
+        if key:
+            console.print(f"[dim]Note: '{default}' key not found — using '{provider}' instead.[/]")
+            return provider, key
+
+    return None, None
 
 def run_parser_with_progress(filepath):
     """
@@ -229,48 +305,37 @@ def run_local_fallback_query(parser, query):
     else:
         console.print("No matching packets found. (Set a Gemini API key for advanced natural language query support!)")
 
-def query_gemini(api_key, parser, user_prompt):
-    """
-    Connects to the Gemini API using google-genai SDK, feeds structured PCAP details,
-    and returns the text explanation + optional search filter.
-    """
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        console.print("[bold red]Error:[/] The google-genai library is missing. Install it using `pip install google-genai`.")
-        return None, None
+# ── Shared AI helpers ─────────────────────────────────────────────────────────
 
-    stats = parser.get_summary_statistics()
-    dhcp_summary = [f"{ip} -> {name}" for ip, name in parser.ip_to_hostname.items()]
-    alerts_summary = [f"[{a['severity']}] {a['type']}: {a['description']}" for a in parser.alerts]
-    
-    sorted_convs = sorted(parser.connections.items(), key=lambda x: x[1]["bytes"], reverse=True)[:10]
-    convs_summary = [f"{s} -> {d} via {p} ({c['packets']} pkts, {terminal_ui.format_size(c['bytes'])})" for (s, d, p), c in sorted_convs]
+def _build_system_prompt(parser):
+    """Build the structured PCAP context sent to every AI provider."""
+    stats         = parser.get_summary_statistics()
+    dhcp_summary  = [f"{ip} -> {name}" for ip, name in parser.ip_to_hostname.items()]
+    alerts_sum    = [f"[{a['severity']}] {a['type']}: {a['description']}" for a in parser.alerts]
+    sorted_convs  = sorted(parser.connections.items(), key=lambda x: x[1]["bytes"], reverse=True)[:10]
+    convs_sum     = [f"{s} -> {d} via {p} ({c['packets']} pkts, {terminal_ui.format_size(c['bytes'])})" for (s, d, p), c in sorted_convs]
+    creds_sum     = [f"{c['protocol']} creds at {c['src']}->{c['dst']}: {c['username']} / {c['password']}" for c in parser.credentials]
+    dns_sum       = [f"{d['src']} lookup '{d['qname']}' -> '{d['answers']}'" for d in parser.dns_queries[:25]]
+    http_sum      = [f"{h['src']} -> {h['host']} {h['method']} {h['path']} [{h['status']}]" for h in parser.http_traffic[:25]]
+    tls_sum       = [f"{t['src']} -> SNI: {t['host']}" for t in parser.tls_traffic[:25]]
 
-    creds_summary = [f"{c['protocol']} creds found at {c['src']} -> {c['dst']}: User: {c['username']} / Pass: {c['password']}" for c in parser.credentials]
-    dns_summary = [f"{dns['src']} lookup '{dns['qname']}' -> '{dns['answers']}'" for dns in parser.dns_queries[:25]]
-    http_summary = [f"{http['src']} -> {http['host']} HTTP {http['method']} {http['path']} [Status: {http['status']}]" for http in parser.http_traffic[:25]]
-    tls_summary = [f"{tls['src']} -> TLS Client Hello SNI: {tls['host']}" for tls in parser.tls_traffic[:25]]
-
-    # Build compact IP->website map for Gemini context so it can answer "what sites did X visit?"
-    ip_website_map = parser.get_ip_website_map()
-    ip_websites_summary = []
-    for ip, data in list(ip_website_map.items())[:20]:
+    ip_map = parser.get_ip_website_map()
+    ip_web_sum = []
+    for ip, data in list(ip_map.items())[:20]:
         name_part = f" ({data['hostname']})" if data.get("hostname") else ""
-        all_sites = list(dict.fromkeys(
+        sites = list(dict.fromkeys(
             data.get("dns", [])[:6] + data.get("tls", [])[:6] + data.get("http", [])[:4]
         ))[:10]
-        if all_sites:
-            ip_websites_summary.append(f"{ip}{name_part} visited: {', '.join(all_sites)}")
+        if sites:
+            ip_web_sum.append(f"{ip}{name_part} visited: {', '.join(sites)}")
 
-    system_instruction = f"""You are AuraSniff AI, a premium network security analysis assistant.
+    return f"""You are AuraSniff AI, a premium network security analysis assistant.
 You are helping the user inspect a packet capture (PCAP/PCAPNG) file.
 Analyze the following structured capture summary and answer the user's question.
 
 CRITICAL INSTRUCTIONS:
 1. Provide a clear, expert, and concise explanation in Markdown format.
-2. If the user's question implies filtering or showing matching packets (e.g. "show me DNS queries from 192.168.1.15", "list credentials", "what did the laptop talk to?"), you MUST output a structured filter JSON block at the very end of your response, strictly inside a code block marked with ```json.
+2. If the user's question implies filtering or showing matching packets, you MUST output a structured filter JSON block at the very end of your response, strictly inside a code block marked with ```json.
 The JSON must follow this schema:
 {{
   "filter": {{
@@ -278,68 +343,137 @@ The JSON must follow this schema:
     "dst": "optional destination IP or hostname",
     "proto": "optional protocol name e.g. TCP, UDP, DNS, HTTP, ICMP",
     "port": optional_port_integer,
-    "text": "optional text search keyword matching info summary"
+    "text": "optional text search keyword"
   }}
 }}
-Do not write anything else in that JSON block. If no packet list needs to be shown, do not output the JSON filter.
+Do not write anything else in that JSON block. Omit it entirely if no packet list needs to be shown.
 
-Capture Summary details:
-- File Name: {os.path.basename(parser.filepath)}
+Capture Summary:
+- File: {os.path.basename(parser.filepath)}
 - Total Packets: {stats['total_packets']:,}
 - Total Bytes: {terminal_ui.format_size(stats['total_bytes'])}
-- Duration: {stats['duration']} seconds
-- Protocol Distribution: {stats['protocols_count']}
-- Security Alerts: {alerts_summary}
-- Extracted Credentials: {creds_summary}
-- Hostname Resolution (DHCP): {dhcp_summary}
-- Top Conversations: {convs_summary}
-- IP -> Website Map (DNS+TLS+HTTP per source): {ip_websites_summary}
-- Recent DNS queries: {dns_summary}
-- Recent HTTP requests: {http_summary}
-- Recent TLS SNI queries: {tls_summary}
+- Duration: {stats['duration']} s
+- Protocols: {stats['protocols_count']}
+- Security Alerts: {alerts_sum}
+- Credentials: {creds_sum}
+- DHCP Hostnames: {dhcp_summary}
+- Top Conversations: {convs_sum}
+- IP -> Website Map: {ip_web_sum}
+- DNS Queries (recent 25): {dns_sum}
+- HTTP Requests (recent 25): {http_sum}
+- TLS SNI (recent 25): {tls_sum}
 """
 
+def _extract_json_filter(text_response):
+    """Parse optional JSON filter block from AI response. Returns (clean_text, filter_dict)."""
+    json_filter = None
+    json_match  = re.search(r'```json\s*(\{.*?\})\s*```', text_response, re.DOTALL)
+    if json_match:
+        try:
+            json_filter   = json.loads(json_match.group(1))
+            text_response = text_response.replace(json_match.group(0), "").strip()
+        except Exception:
+            pass
+    return text_response, json_filter
+
+# ── Per-provider query functions ───────────────────────────────────────────────
+
+def query_gemini(api_key, parser, user_prompt):
+    """Query Google Gemini (gemini-2.5-flash)."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        console.print("[bold red]Error:[/] google-genai missing. Run: pip install google-genai")
+        return None, None
+
     client = genai.Client(api_key=api_key)
-    
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model="gemini-2.5-flash",
             contents=user_prompt,
             config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
+                system_instruction=_build_system_prompt(parser),
                 temperature=0.2
             )
         )
     except Exception as e:
-        console.print(f"[bold red]API Error:[/] {e}")
+        console.print(f"[bold red]Gemini API Error:[/] {e}")
         return None, None
 
-    text_response = response.text
-    
-    json_filter = None
-    json_match = re.search(r'```json\s*(\{.*?\})\s*```', text_response, re.DOTALL)
-    if json_match:
-        try:
-            json_filter = json.loads(json_match.group(1))
-            text_response = text_response.replace(json_match.group(0), "").strip()
-        except Exception:
-            pass
+    return _extract_json_filter(response.text)
 
-    return text_response, json_filter
+def query_claude(api_key, parser, user_prompt):
+    """Query Anthropic Claude (claude-3-5-haiku-20241022)."""
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[bold red]Error:[/] anthropic missing. Run: pip install anthropic")
+        return None, None
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        message = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=2048,
+            temperature=0.2,
+            system=_build_system_prompt(parser),
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+        text_response = message.content[0].text
+    except Exception as e:
+        console.print(f"[bold red]Claude API Error:[/] {e}")
+        return None, None
+
+    return _extract_json_filter(text_response)
+
+def query_openai(api_key, parser, user_prompt):
+    """Query OpenAI (gpt-4o-mini)."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        console.print("[bold red]Error:[/] openai missing. Run: pip install openai")
+        return None, None
+
+    client = OpenAI(api_key=api_key)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": _build_system_prompt(parser)},
+                {"role": "user",   "content": user_prompt}
+            ]
+        )
+        text_response = response.choices[0].message.content
+    except Exception as e:
+        console.print(f"[bold red]OpenAI API Error:[/] {e}")
+        return None, None
+
+    return _extract_json_filter(text_response)
+
+_PROVIDER_QUERY_FN = {
+    "gemini": query_gemini,
+    "claude": query_claude,
+    "openai": query_openai,
+}
 
 def handle_query(parser, query):
-    api_key = get_api_key()
-    
-    if not api_key:
+    provider, api_key = get_active_provider()
+
+    if not provider:
         run_local_fallback_query(parser, query)
         return
 
-    with console.status("[cyan]Asking AuraSniff AI...", spinner="dots"):
-        explanation, filter_dict = query_gemini(api_key, parser, query)
+    p_display = _PROVIDER_DISPLAY.get(provider, provider.title())
+    query_fn  = _PROVIDER_QUERY_FN.get(provider, query_gemini)
+
+    with console.status(f"[cyan]Asking {p_display}...", spinner="dots"):
+        explanation, filter_dict = query_fn(api_key, parser, query)
 
     if explanation:
-        console.print(Panel(explanation, title="AuraSniff AI Assistant", border_style="green"))
-        
+        console.print(Panel(explanation, title=f"AuraSniff AI  [{p_display}]", border_style="green"))
+
         if filter_dict and "filter" in filter_dict:
             criteria = filter_dict["filter"]
             console.print(f"[bold blue]AI Recommended Filter:[/] {criteria}")
@@ -350,8 +484,9 @@ def handle_query(parser, query):
             else:
                 console.print("[yellow]No packets matched the AI-recommended filter criteria.[/]")
     else:
-        console.print("[bold red]Failed to get response from Gemini API.[/] Running local fallback...")
+        console.print(f"[bold red]Failed to get a response from {p_display}.[/] Running local fallback...")
         run_local_fallback_query(parser, query)
+
 
 def run_shell(parser):
     # Render dashboard first for context
@@ -359,14 +494,22 @@ def run_shell(parser):
     terminal_ui.render_dashboard(stats, parser)
     
     terminal_ui.render_shell_banner()
-    api_key = get_api_key()
-    if not api_key:
-        console.print("[bold yellow]Warning:[/] No Gemini API key configured. Commands will run in local rule-based fallback mode.")
-        console.print("To unlock full AI capabilities, exit and run: `aurasniff config set-key <API_KEY>`\n")
+    active_provider, _ = get_active_provider()
+
+    if active_provider:
+        p_color   = _PROVIDER_COLORS.get(active_provider, "green")
+        p_display = _PROVIDER_DISPLAY.get(active_provider, active_provider.title())
+        prompt_str = f"\n[bold green]AuraSniff[/] [bold {p_color}]\\[{p_display}][/] "
+    else:
+        console.print("[bold yellow]Warning:[/] No AI provider key found. Running in offline mode.")
+        console.print(
+            "Set a key with: [cyan]aurasniff config set-key <KEY> --provider gemini|claude|openai[/]\n"
+        )
+        prompt_str = "\n[bold green]AuraSniff[/] [dim]\\[Offline][/] "
 
     while True:
         try:
-            user_input = Prompt.ask("\n[bold green]AuraSniff[/] ").strip()
+            user_input = Prompt.ask(prompt_str).strip()
             if not user_input:
                 continue
 
@@ -459,13 +602,26 @@ def main():
     
     subparsers = parser.add_subparsers(dest="command", help="Subcommands")
 
-    config_parser = subparsers.add_parser("config", help="Manage API key configuration")
-    config_sub = config_parser.add_subparsers(dest="config_action", help="Actions")
-    
-    set_key_parser = config_sub.add_parser("set-key", help="Set Gemini API Key")
-    set_key_parser.add_argument("key", help="Gemini API Key")
-    
-    config_sub.add_parser("show", help="Show current configuration")
+    config_parser = subparsers.add_parser("config", help="Manage AI provider configuration")
+    config_sub    = config_parser.add_subparsers(dest="config_action", help="Actions")
+
+    set_key_parser = config_sub.add_parser("set-key", help="Save an API key (stored in OS keychain)")
+    set_key_parser.add_argument("key", help="API key value")
+    set_key_parser.add_argument(
+        "--provider", "-p",
+        choices=["gemini", "claude", "openai"],
+        default="gemini",
+        help="AI provider the key belongs to (default: gemini)"
+    )
+
+    set_prov_parser = config_sub.add_parser("set-provider", help="Set the default AI provider")
+    set_prov_parser.add_argument(
+        "provider",
+        choices=["gemini", "claude", "openai"],
+        help="Provider to use by default"
+    )
+
+    config_sub.add_parser("show", help="Show all configured keys and the active provider")
 
     analyze_parser = subparsers.add_parser("analyze", help="Scan capture and show dashboard")
     analyze_parser.add_argument("pcap_file", help="Path to PCAP/PCAPNG file")
@@ -485,20 +641,45 @@ def main():
 
     if args.command == "config":
         if args.config_action == "set-key":
+            provider = args.provider
+            if _store_key_secure(provider, args.key):
+                console.print(
+                    f"[bold green]{_PROVIDER_DISPLAY.get(provider, provider.title())} API key saved![/]"
+                    " [dim](stored in OS keychain — never written to disk in plain text)[/]"
+                )
+            else:
+                console.print(f"[bold red]Failed to save {provider} API key.[/]")
+
+        elif args.config_action == "set-provider":
             config = load_config()
-            config["gemini_api_key"] = args.key
+            config["default_provider"] = args.provider
             if save_config(config):
-                console.print("[bold green]Gemini API Key saved successfully![/]")
+                display = _PROVIDER_DISPLAY.get(args.provider, args.provider.title())
+                console.print(f"[bold green]Default provider set to:[/] {display}")
             else:
-                console.print("[bold red]Failed to save API key.[/]")
+                console.print("[bold red]Failed to save provider setting.[/]")
+
         elif args.config_action == "show":
-            config = load_config()
-            key = config.get("gemini_api_key")
-            if key:
-                masked = key[:6] + "..." + key[-4:] if len(key) > 10 else "..."
-                console.print(f"Gemini API Key: [green]{masked}[/]")
-            else:
-                console.print("Gemini API Key: [red]Not Set[/] (Use `aurasniff config set-key <KEY>`)")
+            config          = load_config()
+            active_prov, _  = get_active_provider()
+            default_prov    = config.get("default_provider", "gemini")
+            console.print(f"\n[bold cyan]AuraSniff — AI Provider Config[/]")
+            console.print(
+                f"  Active provider : [bold green]{_PROVIDER_DISPLAY.get(active_prov, 'None (Offline)') if active_prov else 'None (Offline)'}[/]"
+            )
+            console.print(f"  Default setting : [cyan]{default_prov}[/]\n")
+            for prov, env_var in _PROVIDER_ENV_VARS.items():
+                key = _get_key_secure(prov)
+                if key:
+                    masked = key[:6] + "•••" + key[-4:] if len(key) > 10 else "•" * 8
+                    src    = "env var" if os.environ.get(env_var) else "keychain/config"
+                    console.print(
+                        f"  {prov.ljust(8)}: [green]{masked}[/] [dim]({src})[/]"
+                    )
+                else:
+                    console.print(f"  {prov.ljust(8)}: [red]not configured[/]")
+            console.print()
+
         else:
             config_parser.print_help()
         sys.exit(0)
