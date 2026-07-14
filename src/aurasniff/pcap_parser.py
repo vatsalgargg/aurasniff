@@ -287,21 +287,33 @@ class PCAPParser:
                 answers = []
                 if dns.an:
                     for i in range(dns.ancount):
-                        ans = dns.an[i]
-                        if ans.type == 1:
-                            answers.append(ans.rdata)
-                        elif ans.type == 28:
-                            answers.append(ans.rdata)
-                        elif ans.type == 5:
-                            answers.append(ans.rdata.decode("utf-8", errors="ignore").rstrip("."))
+                        try:
+                            ans = dns.an[i]
+                            if ans.type == 1:   # A record (IPv4)
+                                # BUG FIX: rdata can be a Scapy object, not always a plain string
+                                answers.append(str(ans.rdata))
+                            elif ans.type == 28: # AAAA record (IPv6)
+                                answers.append(str(ans.rdata))
+                            elif ans.type == 5:  # CNAME
+                                # BUG FIX: in modern Scapy rdata is already a str, not bytes
+                                rdata = ans.rdata
+                                if isinstance(rdata, bytes):
+                                    answers.append(rdata.decode("utf-8", errors="ignore").rstrip("."))
+                                else:
+                                    answers.append(str(rdata).rstrip("."))
+                            elif ans.type == 16: # TXT record
+                                answers.append(str(ans.rdata))
+                        except Exception:
+                            pass
 
+                # BUG FIX: ensure all answers are strings before joining
                 self.dns_queries.append({
                     "index": index,
                     "qname": qname,
                     "type": qtype_name,
                     "src": src_ip,
                     "dst": dst_ip,
-                    "answers": ", ".join(answers) if answers else "N/A"
+                    "answers": ", ".join(str(a) for a in answers) if answers else "N/A"
                 })
 
         if packet.haslayer(scapy.DHCP) or (sport in (67, 68) and dport in (67, 68)):
@@ -406,7 +418,7 @@ class PCAPParser:
                 if pos < len(payload):
                     session_id_len = payload[pos]
                     pos += 1 + session_id_len
-                
+
                 if pos + 2 < len(payload):
                     cipher_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
                     pos += 2 + cipher_len
@@ -418,27 +430,29 @@ class PCAPParser:
                 if pos + 2 < len(payload):
                     ext_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
                     pos += 2
-                    end_pos = pos + ext_len
-                    
-                    while pos + 4 < len(payload) and pos < end_pos:
+                    end_pos = min(pos + ext_len, len(payload))
+
+                    while pos + 4 <= len(payload) and pos < end_pos:
                         ext_type = int.from_bytes(payload[pos:pos+2], byteorder="big")
                         ext_data_len = int.from_bytes(payload[pos+2:pos+4], byteorder="big")
                         pos += 4
-                        
-                        if ext_type == 0:
-                            if pos + 2 < len(payload):
-                                sni_list_len = int.from_bytes(payload[pos:pos+2], byteorder="big")
+
+                        if ext_type == 0:  # SNI extension
+                            # BUG FIX: must check pos+5 is within bounds before accessing payload[pos+2]
+                            if pos + 5 < len(payload):
                                 name_type = payload[pos+2]
                                 if name_type == 0:
                                     name_len = int.from_bytes(payload[pos+3:pos+5], byteorder="big")
-                                    sni = payload[pos+5:pos+5+name_len].decode("utf-8", errors="ignore")
-                                    
-                                    self.tls_traffic.append({
-                                        "index": index,
-                                        "host": sni,
-                                        "src": src_ip,
-                                        "dst": dst_ip
-                                    })
+                                    end_sni = pos + 5 + name_len
+                                    if end_sni <= len(payload):
+                                        sni = payload[pos+5:end_sni].decode("utf-8", errors="ignore")
+                                        if sni:  # only store non-empty SNI
+                                            self.tls_traffic.append({
+                                                "index": index,
+                                                "host": sni,
+                                                "src": src_ip,
+                                                "dst": dst_ip
+                                            })
                                     return
                         pos += ext_data_len
         except Exception:
@@ -628,3 +642,46 @@ class PCAPParser:
             "http_count": len(self.http_traffic),
             "tls_count": len(self.tls_traffic)
         }
+
+    def get_ip_website_map(self):
+        """
+        Aggregates DNS, HTTP, and TLS SNI data per source IP into a dictionary:
+        {
+            "192.168.1.10": {
+                "hostname": "LAPTOP-XYZ",  # from DHCP if available
+                "dns":  ["google.com", "youtube.com"],  # domains this IP queried
+                "http": ["neverssl.com"],               # HTTP hosts this IP connected to
+                "tls":  ["github.com", "api.google.com"] # TLS/HTTPS SNI names
+            },
+            ...
+        }
+        """
+        ip_map = defaultdict(lambda: {"hostname": None, "dns": [], "http": [], "tls": []})
+
+        # DNS queries — source IP issued these lookups
+        for dns in self.dns_queries:
+            src = dns["src"]
+            domain = dns["qname"]
+            if domain and domain not in ip_map[src]["dns"]:
+                ip_map[src]["dns"].append(domain)
+
+        # HTTP traffic — source IP connected to these plaintext hosts
+        for http in self.http_traffic:
+            src = http["src"]
+            host = http["host"]
+            if host and host not in ip_map[src]["http"]:
+                ip_map[src]["http"].append(host)
+
+        # TLS SNI — source IP connected to these HTTPS hosts
+        for tls in self.tls_traffic:
+            src = tls["src"]
+            host = tls["host"]
+            if host and host not in ip_map[src]["tls"]:
+                ip_map[src]["tls"].append(host)
+
+        # Attach DHCP hostname where available
+        for ip in ip_map:
+            if ip in self.ip_to_hostname:
+                ip_map[ip]["hostname"] = self.ip_to_hostname[ip]
+
+        return dict(ip_map)

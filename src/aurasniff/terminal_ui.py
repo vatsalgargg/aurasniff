@@ -190,7 +190,7 @@ def render_packets_list(packets, parser):
         if dst in parser.ip_to_hostname:
             dst = f"{dst} ({parser.ip_to_hostname[dst]})"
 
-        time_str = f"{pkt['time'] - parser.start_time:.4f}"
+        time_str = f"{pkt['time'] - parser.start_time:.4f}" if parser.start_time is not None else "N/A"
 
         proto = pkt["proto"]
         proto_style = "bold white"
@@ -360,8 +360,76 @@ def render_shell_banner():
                 ("💬", "green"),
                 ("\nAsk Gemini about your PCAP file. Type your question in natural language.\n", "italic dim"),
                 ("Examples: 'Is there any suspicious traffic?', 'Find credentials', 'Who did 192.168.1.15 talk to?'\n", "cyan"),
-                ("Special commands: 'exit' to quit shell, 'help' for options, 'detail <#>' to inspect packet layers.", "dim")
+                ("Special commands: 'exit' to quit shell, 'help' for options, 'detail <#>' to inspect packet layers.", "dim"),
+                ("\n'websites' to see all IP→website maps, 'websites <IP>' to filter by IP.", "dim")
             )
         ),
         border_style="green"
     ))
+
+
+def render_ip_websites_table(ip_website_map, target_ip=None):
+    """
+    Renders a Rich table showing which websites each IP has visited,
+    broken down by DNS queries, HTTP Host headers, and TLS/HTTPS SNI.
+    If target_ip is provided, only that IP's activity is shown.
+    """
+    # Filter by target IP or hostname if specified
+    if target_ip:
+        filtered = {
+            ip: data for ip, data in ip_website_map.items()
+            if target_ip.lower() in ip.lower()
+            or (data.get("hostname") and target_ip.lower() in data["hostname"].lower())
+        }
+    else:
+        filtered = ip_website_map
+
+    if not filtered:
+        console.print(Panel(
+            Text(
+                f"No website activity found{f' for: {target_ip}' if target_ip else ''}.",
+                style="italic yellow"
+            ),
+            title="🌐 IP → Website Map",
+            border_style="cyan"
+        ))
+        return
+
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        expand=True,
+        show_lines=True
+    )
+    table.add_column("Source IP", ratio=2, style="bold white")
+    table.add_column("Device Name", ratio=2)
+    table.add_column("DNS Queries", ratio=4)
+    table.add_column("HTTP Sites", ratio=3)
+    table.add_column("TLS / HTTPS Sites", ratio=4)
+
+    for ip in sorted(filtered.keys()):
+        data = filtered[ip]
+        hostname = data.get("hostname") or "—"
+        dns_list  = data.get("dns",  [])
+        http_list = data.get("http", [])
+        tls_list  = data.get("tls",  [])
+
+        def _fmt_list(lst, limit=12):
+            if not lst:
+                return Text("None", style="dim")
+            lines = lst[:limit]
+            suffix = f"\n  … +{len(lst) - limit} more" if len(lst) > limit else ""
+            return Text("\n".join(lines) + suffix)
+
+        table.add_row(
+            ip,
+            Text(hostname, style="bold yellow" if hostname != "—" else "dim"),
+            Text(_fmt_list(dns_list).plain,  style="cyan"),
+            Text(_fmt_list(http_list).plain, style="green"),
+            Text(_fmt_list(tls_list).plain,  style="magenta"),
+        )
+
+    title = f"🌐 IP → Website Map{f'  (filter: {target_ip})' if target_ip else ''}"
+    total_ips = len(filtered)
+    subtitle = f"{total_ips} IP address{'es' if total_ips != 1 else ''} shown"
+    console.print(Panel(table, title=title, subtitle=subtitle, border_style="cyan"))

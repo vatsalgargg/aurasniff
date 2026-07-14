@@ -94,15 +94,15 @@ def filter_packets_locally(parser, query_dict):
     Keys can be: src, dst, proto, port, text
     """
     filtered = []
-    src = query_dict.get("src")
-    dst = query_dict.get("dst")
+    src   = query_dict.get("src")
+    dst   = query_dict.get("dst")
     proto = query_dict.get("proto")
-    port = query_dict.get("port")
-    text = query_dict.get("text")
+    port  = query_dict.get("port")
+    text  = query_dict.get("text")
 
     for pkt in parser.packets_summary:
         if src:
-            src_ip_match = (src.lower() in pkt["src"].lower())
+            src_ip_match   = (src.lower() in pkt["src"].lower())
             src_host_match = False
             if pkt["src"] in parser.ip_to_hostname:
                 src_host_match = (src.lower() in parser.ip_to_hostname[pkt["src"]].lower())
@@ -110,7 +110,7 @@ def filter_packets_locally(parser, query_dict):
                 continue
 
         if dst:
-            dst_ip_match = (dst.lower() in pkt["dst"].lower())
+            dst_ip_match   = (dst.lower() in pkt["dst"].lower())
             dst_host_match = False
             if pkt["dst"] in parser.ip_to_hostname:
                 dst_host_match = (dst.lower() in parser.ip_to_hostname[pkt["dst"]].lower())
@@ -121,13 +121,19 @@ def filter_packets_locally(parser, query_dict):
             continue
 
         if port:
-            port_str = f":{port}"
-            sport_str = f" {port} ->"
-            dport_str = f"-> {port}"
-            if not (port_str in pkt["info"] or sport_str in pkt["info"] or dport_str in pkt["info"]):
+            # BUG FIX: info format is "TCP: <sport> -> <dport> [flags]" or "UDP: <sport> -> <dport>"
+            # The old ":port" pattern never matched this format.
+            # Correct patterns: port as source (" <port> ->") or as destination ("-> <port>" or "-> <port> [").
+            port_s  = str(port)
+            info    = pkt["info"]
+            sport_match = f" {port_s} ->" in info
+            dport_match = (f"-> {port_s} " in info or info.endswith(f"-> {port_s}") or f"-> {port_s}[" in info)
+            if not (sport_match or dport_match):
                 continue
 
-        if text and text.lower() not in pkt["info"].lower() and text.lower() not in pkt["proto"].lower():
+        # BUG FIX: only search info field for text, not proto — proto is too short and causes
+        # false negatives (e.g. searching "github" skips all TCP packets not matching "github" in "TCP")
+        if text and text.lower() not in pkt["info"].lower():
             continue
 
         filtered.append(pkt)
@@ -139,8 +145,12 @@ def run_local_fallback_query(parser, query):
     If no API key is available, run basic keyword-based matching rules.
     """
     query_lower = query.lower()
-    
-    if "cred" in query_lower or "pass" in query_lower or "login" in query_lower or "user" in query_lower:
+
+    # BUG FIX: "user" alone was too broad (matched "issue", etc.).
+    # Now check for more specific credential-related terms.
+    if ("cred" in query_lower or "password" in query_lower or "passwd" in query_lower
+            or "login" in query_lower or "username" in query_lower
+            or ("pass" in query_lower and "passive" not in query_lower)):
         console.print("[bold yellow]Running Local Fallback: Displaying extracted credentials...[/]")
         if parser.credentials:
             cred_table = terminal_ui.Table(show_header=True, header_style="bold green")
@@ -156,7 +166,9 @@ def run_local_fallback_query(parser, query):
             console.print("No credentials found in packet payloads.")
         return
 
-    if "suspect" in query_lower or "suspicious" in query_lower or "alert" in query_lower or "threat" in query_lower or "attack" in query_lower or "anomaly" in query_lower:
+    if ("suspect" in query_lower or "suspicious" in query_lower or "alert" in query_lower
+            or "threat" in query_lower or "attack" in query_lower or "anomaly" in query_lower
+            or "malicious" in query_lower or "intrusion" in query_lower):
         console.print("[bold yellow]Running Local Fallback: Displaying security alerts...[/]")
         if parser.alerts:
             alert_table = terminal_ui.Table(show_header=True, header_style="bold red")
@@ -171,12 +183,27 @@ def run_local_fallback_query(parser, query):
             console.print("No alerts or security anomalies detected.")
         return
 
-    if "dns" in query_lower or "domain" in query_lower or "lookup" in query_lower:
+    # NEW: website/browsing queries — route to IP→website map
+    website_keywords = (
+        "website", "sites", "browsing", "browse", "visited", "visiting",
+        "internet", "domain", "domains", "surf", "browsed", "what is",
+        "which site", "history"
+    )
+    if any(kw in query_lower for kw in website_keywords):
+        ip_match = re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', query)
+        target_ip = ip_match.group(0) if ip_match else None
+        msg = f"IP {target_ip}" if target_ip else "all IPs"
+        console.print(f"[bold yellow]Running Local Fallback: Showing websites visited by {msg}...[/]")
+        ip_website_map = parser.get_ip_website_map()
+        terminal_ui.render_ip_websites_table(ip_website_map, target_ip=target_ip)
+        return
+
+    if "dns" in query_lower or "lookup" in query_lower or "nslookup" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying DNS log...[/]")
         terminal_ui.render_dns_table(parser.dns_queries[:40])
         return
 
-    if "http" in query_lower or "web" in query_lower or "url" in query_lower:
+    if "http" in query_lower or "url" in query_lower:
         console.print("[bold yellow]Running Local Fallback: Displaying HTTP log...[/]")
         terminal_ui.render_http_table(parser.http_traffic[:40])
         return
@@ -226,6 +253,17 @@ def query_gemini(api_key, parser, user_prompt):
     http_summary = [f"{http['src']} -> {http['host']} HTTP {http['method']} {http['path']} [Status: {http['status']}]" for http in parser.http_traffic[:25]]
     tls_summary = [f"{tls['src']} -> TLS Client Hello SNI: {tls['host']}" for tls in parser.tls_traffic[:25]]
 
+    # Build compact IP->website map for Gemini context so it can answer "what sites did X visit?"
+    ip_website_map = parser.get_ip_website_map()
+    ip_websites_summary = []
+    for ip, data in list(ip_website_map.items())[:20]:
+        name_part = f" ({data['hostname']})" if data.get("hostname") else ""
+        all_sites = list(dict.fromkeys(
+            data.get("dns", [])[:6] + data.get("tls", [])[:6] + data.get("http", [])[:4]
+        ))[:10]
+        if all_sites:
+            ip_websites_summary.append(f"{ip}{name_part} visited: {', '.join(all_sites)}")
+
     system_instruction = f"""You are AuraSniff AI, a premium network security analysis assistant.
 You are helping the user inspect a packet capture (PCAP/PCAPNG) file.
 Analyze the following structured capture summary and answer the user's question.
@@ -255,6 +293,7 @@ Capture Summary details:
 - Extracted Credentials: {creds_summary}
 - Hostname Resolution (DHCP): {dhcp_summary}
 - Top Conversations: {convs_summary}
+- IP -> Website Map (DNS+TLS+HTTP per source): {ip_websites_summary}
 - Recent DNS queries: {dns_summary}
 - Recent HTTP requests: {http_summary}
 - Recent TLS SNI queries: {tls_summary}
@@ -337,13 +376,15 @@ def run_shell(parser):
             
             if user_input.lower() == "help":
                 console.print("[bold white]Available Commands:[/]")
-                console.print("  [cyan]exit/quit/q[/]      - Exit the interactive shell")
-                console.print("  [cyan]detail <index>[/]   - Inspect layers and hexdump of packet #index (e.g. `detail 45`)")
-                console.print("  [cyan]dns[/]              - Show parsed DNS log")
-                console.print("  [cyan]http[/]             - Show parsed HTTP log")
-                console.print("  [cyan]creds[/]            - Show extracted credentials")
-                console.print("  [cyan]alerts[/]           - Show detected anomalies")
-                console.print("  [cyan]<any text>[/]       - Ask AuraSniff AI a question about the capture")
+                console.print("  [cyan]exit/quit/q[/]        - Exit the interactive shell")
+                console.print("  [cyan]detail <index>[/]     - Inspect layers and hexdump of packet #index (e.g. `detail 45`)")
+                console.print("  [cyan]dns[/]                - Show parsed DNS log")
+                console.print("  [cyan]http[/]               - Show parsed HTTP log")
+                console.print("  [cyan]creds[/]              - Show extracted credentials")
+                console.print("  [cyan]alerts[/]             - Show detected anomalies")
+                console.print("  [cyan]websites[/]           - Show all IPs and the websites they visited")
+                console.print("  [cyan]websites <IP>[/]      - Show websites visited by a specific IP or hostname")
+                console.print("  [cyan]<any text>[/]         - Ask AuraSniff AI a question about the capture")
                 continue
 
             detail_match = re.match(r'^detail\s+(\d+)$', user_input, re.IGNORECASE)
@@ -358,6 +399,18 @@ def run_shell(parser):
             if user_input.lower() == "http":
                 terminal_ui.render_http_table(parser.http_traffic[:50])
                 continue
+
+            # NEW: websites command — show IP->website map
+            websites_match = re.match(r'^websites(?:\s+(.+))?$', user_input, re.IGNORECASE)
+            if websites_match:
+                target_ip = (websites_match.group(1) or "").strip() or None
+                ip_website_map = parser.get_ip_website_map()
+                if not ip_website_map:
+                    console.print("[yellow]No website activity (DNS/HTTP/TLS) found in this capture.[/]")
+                else:
+                    terminal_ui.render_ip_websites_table(ip_website_map, target_ip=target_ip)
+                continue
+
             if user_input.lower() == "creds":
                 if parser.credentials:
                     cred_table = terminal_ui.Table(show_header=True, header_style="bold green")
