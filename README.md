@@ -50,40 +50,41 @@ AuraSniff's terminal interface is built with `Rich` for a clean, cyber-neon them
 │ Premium Command Line Traffic Inspector & AI Security Assistant             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────── Capture Summary ────────────────┐┌──── Protocol Distribution ────┐
-│ File Path:   home.pcapng                        ││ Protocol  Count  Ratio        │
-│ Packets:     2,729                              ││ TCP          42  91.3% ██████ │
-│ Data Size:   1.87 MB                            ││ UDP           4   8.7% █░░░░░ │
-│ Duration:    45.2 s                             │└───────────────────────────────┘
+│ File Path:   capture.pcapng                     ││ Protocol  Count  Ratio        │
+│ Packets:     5,312                              ││ TCP       4,821  90.8% ██████ │
+│ Data Size:   3.41 MB                            ││ UDP         391   7.4% █░░░░░ │
+│ Duration:    62.3 s                             │└───────────────────────────────┘
 └─────────────────────────────────────────────────┘
 ┌───────────────────────── 🔑 Extracted Credentials ──────────────────────────┐
-│ Pkt # │ Protocol  │ Source       │ Destination   │ Credentials Info         │
-│   8   │ HTTP-POST │ 192.168.1.15 │ 93.184.216.34 │ User: admin / Pass: 123  │
-│  13   │ FTP       │ 192.168.1.15 │ 192.168.1.5   │ User: admin / Pass: test │
+│ Pkt # │ Protocol  │ Source      │ Destination  │ Credentials Info            │
+│   42  │ HTTP-POST │ 10.0.0.101  │ 203.0.113.10 │ User: john / Pass: p@ssw0rd │
+│   87  │ FTP       │ 10.0.0.101  │ 10.0.0.5     │ User: ftpuser / Pass: secret│
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### IP → Website Map (`websites`)
 ```text
-┌──────────────────────────────────── 🌐 IP → Website Map ─────────────────────────────────────┐
-│ Source IP      │ Device Name   │ DNS Queries                    │ TLS / HTTPS Sites           │
-│────────────────│───────────────│────────────────────────────────│─────────────────────────────│
-│ 192.168.1.9    │ XW5CG52512KS  │ _googlecast._tcp.local         │ update.code.visualstudio.com│
-│ 192.168.1.15   │ LAPTOP-VATSAL │ google.com                     │ github.com                  │
-│                │               │ youtube.com                    │ api.github.com              │
+┌──────────────────────────────────── 🌐 IP → Website Map ────────────────────────────────────┐
+│ Source IP    │ Device Name  │ DNS Queries           │ TLS / HTTPS Sites                      │
+│──────────────│──────────────│───────────────────────│────────────────────────────────────────│
+│ 10.0.0.101   │ OFFICE-PC    │ google.com            │ github.com                             │
+│              │              │ stackoverflow.com      │ api.github.com                         │
+│ 10.0.0.102   │ WORK-LAPTOP  │ youtube.com           │ accounts.google.com                    │
+│              │              │ reddit.com            │ mail.google.com                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
-  9 IP addresses shown
+  2 IP addresses shown
 ```
 
 ### Deep Packet Hex Dissection (`detail 8`)
 ```text
-Packet #8
-├── Ether (dst=00:11:22:33:44:00, src=00:11:22:33:44:55, type=2048)
-├── IP (version=4, ihl=5, proto=6, src=192.168.1.15, dst=93.184.216.34)
-├── TCP (sport=49152, dport=80, flags=PA, window=8192)
+Packet #42
+├── Ether (dst=aa:bb:cc:dd:ee:01, src=aa:bb:cc:dd:ee:02, type=2048)
+├── IP (version=4, ihl=5, proto=6, src=10.0.0.101, dst=203.0.113.10)
+├── TCP (sport=51423, dport=80, flags=PA, window=8192)
 └── Raw (load=b'POST /login HTTP/1.1\r\nHost: example.com...)
 
-0000  00 11 22 33 44 00 00 11  22 33 44 55 08 00 45 00  |.."3D..."3DU..E.|
-0010  00 df 00 01 00 00 40 06  82 86 c0 a8 01 0f 5d b8  |......@.......].|
+0000  aa bb cc dd ee 01 aa bb  cc dd ee 02 08 00 45 00  |..............E.|
+0010  00 df 00 01 00 00 40 06  7c 9a 0a 00 00 65 cb 00  |......@.|....e..|
 ```
 
 ---
@@ -121,12 +122,12 @@ aurasniff shell <path_to_file.pcap>
 
 #### Natural Language Examples (with or without Gemini key)
 ```
-Which websites is 192.168.1.15 visiting?
+Which websites is 10.0.0.101 visiting?
 Show me browsing history for the laptop
 Is there any suspicious traffic?
 Find login credentials
 What did the device on 10.0.0.5 do?
-Show DNS queries from 192.168.1.9
+Show DNS queries from 10.0.0.102
 ```
 
 ### 2. General Dashboard Scan
@@ -160,4 +161,4 @@ aurasniff config set-key <YOUR_GEMINI_API_KEY>
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](file:///V:/VG/websites/packet-analyzer/LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
