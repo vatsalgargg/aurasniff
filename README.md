@@ -19,21 +19,23 @@
 
 ## 🌟 Introduction
 
-**AuraSniff** is a lightweight, zero-dependency command-line interface (CLI) that brings advanced network forensics and artificial intelligence to your terminal. It parses `.pcap` and `.pcapng` files locally without relying on heavy external software or standard Wireshark installations, computes connection metrics, extracts cleartext login credentials, and features a chat shell where you can query your network captures in natural language using Gemini.
+**AuraSniff** is a lightweight command-line interface (CLI) that brings advanced network forensics and artificial intelligence to your terminal. It parses `.pcap` and `.pcapng` files locally without relying on Wireshark or `tshark`, computes connection metrics, extracts cleartext login credentials, maps which websites each IP address visited, and features a chat shell where you can query your network captures in natural language using Gemini.
 
 ---
 
 ## 🚀 Core Features
 
-* **⚡ Zero-Dependency Dissection**: Streams and parses capture files locally using Scapy. You don't need Wireshark or `tshark` installed.
+* **⚡ Zero-Dependency Dissection**: Streams and parses capture files locally using Scapy. No Wireshark needed.
+* **🌐 IP → Website Map**: Instantly see which websites every IP address in your capture was visiting — built from DNS queries, HTTP Host headers, and TLS/HTTPS SNI names combined.
 * **🔑 Credentials Harvester**: Automatically intercepts and displays cleartext logins across HTTP-POST, FTP, SMTP, POP3, and IMAP payloads.
-* **🚨 Security Anomaly Engine**: Identifies network anomalies in real-time, including:
-  * **Port Scanning**: Highlights hosts hitting multiple distinct ports in short intervals.
+* **🚨 Security Anomaly Engine**: Identifies network anomalies including:
+  * **Port Scanning**: Highlights hosts hitting multiple distinct ports.
   * **ARP Spoofing**: Detects multiple MAC addresses claiming the same IP.
-  * **DNS Tunneling**: Flagging abnormally long, high-entropy query names (indicative of C2/Exfiltration).
-  * **Cleartext passwords**: Warns you about insecure login transmissions.
-* **💬 Gemini AI Chat REPL**: Launch an interactive shell to ask questions like *"Who is scanning ports?"* or *"What did the device with IP 192.168.1.15 do?"*. Gemini translates your questions into local database search filters and answers in markdown.
-* **🔍 Deep Hex Inspection**: Drill down into individual packets to view a structured tree of layers (Ethernet ➜ IP ➜ TCP ➜ Payload) alongside a color-coded side-by-side Hex & ASCII dump.
+  * **DNS Tunneling**: Flags abnormally long, high-entropy query names (indicative of C2/Exfiltration).
+  * **Cleartext passwords**: Warns about insecure login transmissions.
+* **💬 Gemini AI Chat REPL**: Launch an interactive shell to ask questions like *"Who is scanning ports?"*, *"What websites did 192.168.1.15 visit?"*, or *"Are there any suspicious hosts?"*. Gemini translates your questions into local search filters and answers in markdown.
+* **🔍 Deep Hex Inspection**: Drill into individual packets to view a structured layer tree (Ethernet → IP → TCP → Payload) alongside a color-coded Hex & ASCII dump.
+* **🧠 Smart Offline Fallback**: No API key? The tool still intelligently routes natural language queries to the right view — credentials, alerts, websites, DNS, HTTP, or raw packet filter.
 
 ---
 
@@ -49,9 +51,9 @@ AuraSniff's terminal interface is built with `Rich` for a clean, cyber-neon them
 └─────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────── Capture Summary ────────────────┐┌──── Protocol Distribution ────┐
 │ File Path:   home.pcapng                        ││ Protocol  Count  Ratio        │
-│ Packets:     46                                 ││ TCP          42  91.3% ██████ │
-│ Data Size:   3.2 KB                             ││ UDP           4   8.7% █░░░░░ │
-│ Duration:    23.0 s                             │└───────────────────────────────┘
+│ Packets:     2,729                              ││ TCP          42  91.3% ██████ │
+│ Data Size:   1.87 MB                            ││ UDP           4   8.7% █░░░░░ │
+│ Duration:    45.2 s                             │└───────────────────────────────┘
 └─────────────────────────────────────────────────┘
 ┌───────────────────────── 🔑 Extracted Credentials ──────────────────────────┐
 │ Pkt # │ Protocol  │ Source       │ Destination   │ Credentials Info         │
@@ -60,7 +62,19 @@ AuraSniff's terminal interface is built with `Rich` for a clean, cyber-neon them
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Deep Packet Hexdissection (`detail 8`)
+### IP → Website Map (`websites`)
+```text
+┌──────────────────────────────────── 🌐 IP → Website Map ─────────────────────────────────────┐
+│ Source IP      │ Device Name   │ DNS Queries                    │ TLS / HTTPS Sites           │
+│────────────────│───────────────│────────────────────────────────│─────────────────────────────│
+│ 192.168.1.9    │ XW5CG52512KS  │ _googlecast._tcp.local         │ update.code.visualstudio.com│
+│ 192.168.1.15   │ LAPTOP-VATSAL │ google.com                     │ github.com                  │
+│                │               │ youtube.com                    │ api.github.com              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+  9 IP addresses shown
+```
+
+### Deep Packet Hex Dissection (`detail 8`)
 ```text
 Packet #8
 ├── Ether (dst=00:11:22:33:44:00, src=00:11:22:33:44:55, type=2048)
@@ -68,13 +82,8 @@ Packet #8
 ├── TCP (sport=49152, dport=80, flags=PA, window=8192)
 └── Raw (load=b'POST /login HTTP/1.1\r\nHost: example.com...)
 
-Raw Packet Hex/ASCII Dump:
 0000  00 11 22 33 44 00 00 11  22 33 44 55 08 00 45 00  |.."3D..."3DU..E.|
 0010  00 df 00 01 00 00 40 06  82 86 c0 a8 01 0f 5d b8  |......@.......].|
-0020  d8 22 c0 00 00 50 00 00  00 00 00 00 00 00 50 18  |."...P........P.|
-0030  20 00 f4 73 00 00 50 4f  53 54 20 2f 6c 6f 67 69  | ..s..POST /logi|
-0040  n  20 48 54 54 50 2f 31  2e 31 0d 0a 48 6f 73 74  |n HTTP/1.1..Host|
-0050  3a 20 65 78 61 6d 70 6c  65 2e 63 6f 6d 0d 0a 75  |: example.com..u|
 ```
 
 ---
@@ -91,27 +100,45 @@ pip install aurasniff
 ## 🛠️ Usage Guide
 
 ### 1. Interactive AI Chat Shell
-Launch the prompt loop to inspect, query, and dissect the capture file:
+Launch the prompt loop to inspect, query, and dissect a capture file:
 ```bash
 aurasniff shell <path_to_file.pcap>
 ```
-*   Type `dns` to show DNS lookup history.
-*   Type `http` to see HTTP connections.
-*   Type `creds` to print extracted credentials.
-*   Type `alerts` to view detected threats.
-*   Type `detail <pkt_index>` (e.g. `detail 8`) to run deep dissection and hex dumps.
-*   Ask questions like: *"Did any local laptop connect to standard DNS servers?"* or *"Which host triggered the port scanning alert?"*
+
+#### Shell Commands
+
+| Command | Description |
+|---|---|
+| `websites` | Show all IPs and every website they visited (DNS + HTTP + TLS) |
+| `websites <IP>` | Filter website map to a specific IP or device hostname |
+| `dns` | Show full DNS query log |
+| `http` | Show HTTP connections and status codes |
+| `creds` | Print intercepted credentials |
+| `alerts` | View detected security anomalies |
+| `detail <N>` | Deep hex dissection of packet #N (e.g. `detail 42`) |
+| `exit` / `q` | Exit the shell |
+| *any question* | Ask Gemini AI in natural language |
+
+#### Natural Language Examples (with or without Gemini key)
+```
+Which websites is 192.168.1.15 visiting?
+Show me browsing history for the laptop
+Is there any suspicious traffic?
+Find login credentials
+What did the device on 10.0.0.5 do?
+Show DNS queries from 192.168.1.9
+```
 
 ### 2. General Dashboard Scan
-Generate a visual summary of the packet capture:
+Generate a visual summary of the capture:
 ```bash
 aurasniff analyze <path_to_file.pcap>
 ```
 
 ### 3. Quick AI Query
-Run a single natural language question directly from your system command line:
+Run a single natural language question directly from your terminal:
 ```bash
-aurasniff query <path_to_file.pcap> "explain the security alerts found"
+aurasniff query <path_to_file.pcap> "which websites did each IP visit?"
 ```
 
 ### 4. Configure Gemini API Key
