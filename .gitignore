@@ -28,3 +28,6 @@ src/*.egg-info/
 *.pcap
 *.pcapng
 !test_capture.pcap
+
+# Local AI agent context file — never push
+.agent_context.md
