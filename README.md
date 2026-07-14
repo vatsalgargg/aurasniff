@@ -91,9 +91,24 @@ Packet #42
 
 ## ⚙️ Installation
 
-Install the package globally via pip:
+Install the base package (includes Gemini AI support):
 ```bash
 pip install aurasniff
+```
+
+Add Claude (Anthropic) support:
+```bash
+pip install aurasniff[claude]
+```
+
+Add OpenAI GPT-4o support:
+```bash
+pip install aurasniff[openai]
+```
+
+Install everything at once:
+```bash
+pip install aurasniff[all]
 ```
 
 ---
@@ -143,11 +158,43 @@ aurasniff query <path_to_file.pcap> "which websites did each IP visit?"
 ```
 
 ### 4. Configure Gemini API Key
-To enable the AI capabilities, save your Gemini API Key locally:
+To enable AI capabilities, save your API key (stored securely in the OS keychain):
 ```bash
-aurasniff config set-key <YOUR_GEMINI_API_KEY>
+# Gemini (included by default)
+aurasniff config set-key <GEMINI_KEY>
+
+# Claude (requires pip install aurasniff[claude])
+aurasniff config set-key <CLAUDE_KEY> --provider claude
+
+# OpenAI GPT-4o (requires pip install aurasniff[openai])
+aurasniff config set-key <OPENAI_KEY> --provider openai
+
+# Switch the active provider
+aurasniff config set-provider claude
+
+# View all configured keys
+aurasniff config show
 ```
-*Note: If no API key is saved, the tool falls back to a local offline keyword routing parser.*
+> **Security:** Keys are stored in the **OS keychain** (Windows Credential Manager / macOS Keychain / Linux Secret Service), never written to disk in plain text. Environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are also supported for CI/CD use.
+
+---
+
+## 📋 Changelog
+
+### v0.1.4 — Latest
+**New Features**
+- 🤖 **Multi-provider AI**: Claude (`claude-3-5-haiku`) and GPT-4o (`gpt-4o-mini`) supported alongside Gemini
+- 🔐 **Secure key storage**: API keys stored in OS keychain via `keyring` — never written to disk in plain text
+- 🔁 **Auto-fallback**: If default provider key is missing, automatically switches to next available provider
+- 🎨 **Dynamic shell prompt**: Shows active provider `[Gemini]` / `[Claude]` / `[GPT-4o]` / `[Offline]`
+- 📦 **Optional extras**: `pip install aurasniff[claude]`, `[openai]`, `[all]` — lighter default install
+- ⚙️ New config commands: `set-key --provider`, `set-provider`, enhanced `show`
+
+### v0.1.3
+- 🌐 IP → Website Map, `websites` shell command, 7 bug fixes
+
+### v0.1.2
+- Initial public release with dashboard, credentials harvester, anomaly engine, and Gemini AI shell
 
 ---
 

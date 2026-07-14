@@ -4,32 +4,72 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aurasniff"
-version = "0.1.2"
+version = "0.1.4"
 authors = [
-    { name = "Vatsal Garg", email = "vatsal@example.com" }
+    { name = "Vatsal Garg" }
 ]
-description = "A premium interactive CLI network traffic analyzer with Gemini AI integration"
+description = "Interactive CLI network packet analyzer with Gemini, Claude, and GPT-4o AI — no Wireshark needed"
+keywords = [
+    "pcap", "pcapng", "wireshark", "tshark", "scapy",
+    "network", "network-forensics", "packet-analysis", "packet-capture",
+    "security", "cybersecurity", "netsec", "infosec",
+    "cli", "terminal",
+    "gemini", "claude", "openai", "ai", "llm",
+    "forensics", "credentials", "arp-spoofing", "dns-tunneling"
+]
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.8"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    # Maturity
+    "Development Status :: 4 - Beta",
+
+    # Audience
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+
+    # Topic
     "Topic :: Security",
     "Topic :: System :: Networking :: Monitoring",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Internet",
+    "Topic :: Utilities",
+
+    # Environment
+    "Environment :: Console",
+
+    # Language & License
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "scapy>=2.5.0",
     "rich>=13.0.0",
     "google-genai>=1.0.0",
-    "anthropic>=0.30.0",
-    "openai>=1.30.0",
     "keyring>=24.0.0"
 ]
 
+[project.optional-dependencies]
+# pip install aurasniff[claude]   → adds Anthropic Claude support
+# pip install aurasniff[openai]   → adds OpenAI GPT-4o support
+# pip install aurasniff[all]      → adds both
+claude = ["anthropic>=0.30.0"]
+openai = ["openai>=1.30.0"]
+all    = ["anthropic>=0.30.0", "openai>=1.30.0"]
+
 [project.urls]
-Homepage = "https://github.com/vatsalgargg/aurasniff"
-Bug-Tracker = "https://github.com/vatsalgargg/aurasniff/issues"
+Homepage      = "https://github.com/vatsalgargg/aurasniff"
+Repository    = "https://github.com/vatsalgargg/aurasniff"
+Bug-Tracker   = "https://github.com/vatsalgargg/aurasniff/issues"
+Changelog     = "https://github.com/vatsalgargg/aurasniff#-changelog"
 
 [project.scripts]
 aurasniff = "aurasniff.aurasniff:main"
