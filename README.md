@@ -1,8 +1,5 @@
 # ⚡ AuraSniff
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/vatsalgargg/aurasniff/master/assets/logo.png" alt="AuraSniff Logo" width="180" onerror="this.style.display='none'"/>
-</p>
 
 <p align="center">
   <b>A premium, interactive terminal-based network packet capture (PCAP) analyzer with built-in Gemini AI assistance.</b>
