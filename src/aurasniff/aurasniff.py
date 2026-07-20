@@ -114,12 +114,49 @@ def _get_key_secure(provider):
 def get_active_provider():
     """
     Returns (provider_name, api_key) for the configured default provider.
-    If the default has no key, auto-falls back to any available provider.
+    
+    Special case: if both 'gemini' and 'claude' keys are present and the
+    configured provider is not explicitly a single provider, returns
+    ('ensemble', None) to signal the dual-LLM collaborative mode.
+    
     Returns (None, None) when no key is configured anywhere.
     """
     config  = load_config()
-    default = config.get("default_provider", "gemini")
+    default = config.get("default_provider", "auto")
 
+    # Explicit ensemble request
+    if default == "ensemble":
+        gemini_key = _get_key_secure("gemini")
+        claude_key = _get_key_secure("claude")
+        if gemini_key and claude_key:
+            return "ensemble", None
+        # Degrade gracefully if only one key is available
+        if gemini_key:
+            console.print("[bold yellow]Ensemble mode selected but Claude key not found — using Gemini only.[/]")
+            return "gemini", gemini_key
+        if claude_key:
+            console.print("[bold yellow]Ensemble mode selected but Gemini key not found — using Claude only.[/]")
+            return "claude", claude_key
+        return None, None
+
+    # Auto-detect ensemble: if both Gemini & Claude are configured and no
+    # explicit single-provider preference is set, activate ensemble automatically.
+    if default == "auto":
+        gemini_key = _get_key_secure("gemini")
+        claude_key = _get_key_secure("claude")
+        if gemini_key and claude_key:
+            return "ensemble", None
+        if gemini_key:
+            return "gemini", gemini_key
+        if claude_key:
+            return "claude", claude_key
+        # Try OpenAI as last resort
+        openai_key = _get_key_secure("openai")
+        if openai_key:
+            return "openai", openai_key
+        return None, None
+
+    # Explicit single-provider
     key = _get_key_secure(default)
     if key:
         return default, key
@@ -458,6 +495,117 @@ _PROVIDER_QUERY_FN = {
     "openai": query_openai,
 }
 
+_PROVIDER_DISPLAY["ensemble"] = "Gemini ⚡ Claude Ensemble"
+_PROVIDER_COLORS["ensemble"]  = "magenta"
+
+def _format_packets_for_claude(packets, parser, max_packets=30):
+    """
+    Build a compact human-readable text representation of filtered packets
+    to send to Claude for deep forensic analysis.
+    """
+    lines = []
+    for pkt in packets[:max_packets]:
+        line = (
+            f"[#{pkt['index']}] {pkt['proto']} | "
+            f"{pkt['src']} → {pkt['dst']} | "
+            f"{pkt['length']}B | {pkt['info']}"
+        )
+        # Attach DHCP hostname if available
+        src_host = parser.ip_to_hostname.get(pkt["src"])
+        dst_host = parser.ip_to_hostname.get(pkt["dst"])
+        if src_host or dst_host:
+            line += f" | hosts: {src_host or '?'} → {dst_host or '?'}"
+        lines.append(line)
+    return "\n".join(lines)
+
+def handle_ensemble_query(parser, query):
+    """
+    Collaborative Dual-LLM query pipeline:
+      1. Gemini  → fast PCAP-wide analysis + extract a packet filter
+      2. Local   → apply filter, retrieve exact matching packets
+      3. Claude  → deep forensic analysis on the matched packets + Gemini's overview
+    """
+    gemini_key = _get_key_secure("gemini")
+    claude_key = _get_key_secure("claude")
+
+    # ── Step 1: Gemini fast scan ──────────────────────────────────────────────
+    console.print(Panel(
+        "[bold green]Step 1/2[/] — [cyan]Gemini[/] scanning the full capture for relevant traffic…",
+        border_style="green", expand=False
+    ))
+    with console.status("[cyan]Gemini analysing capture…", spinner="dots"):
+        gemini_text, filter_dict = query_gemini(gemini_key, parser, query)
+
+    if not gemini_text:
+        console.print("[bold red]Gemini failed.[/] Falling back to Claude-only mode…")
+        explanation, filter_dict = query_claude(claude_key, parser, query)
+        if explanation:
+            console.print(Panel(explanation, title="AuraSniff AI  [Claude]", border_style="yellow"))
+        else:
+            run_local_fallback_query(parser, query)
+        return
+
+    # Show Gemini's overview briefly
+    console.print(Panel(
+        gemini_text,
+        title="[green]Gemini Overview[/] (Step 1/2)",
+        border_style="dim green"
+    ))
+
+    # ── Step 2: Apply Gemini's filter locally ─────────────────────────────────
+    matched_packets = []
+    if filter_dict and "filter" in filter_dict:
+        criteria = filter_dict["filter"]
+        console.print(f"[bold blue]Gemini filter:[/] {criteria}")
+        matched_packets = filter_packets_locally(parser, criteria)
+        if matched_packets:
+            console.print(
+                f"[green]{len(matched_packets)} packets matched.[/] Sending to Claude for deep analysis…"
+            )
+        else:
+            console.print("[yellow]No packets matched the filter — Claude will analyse the full capture summary.[/]")
+
+    # ── Step 3: Claude deep forensic analysis ────────────────────────────────
+    console.print(Panel(
+        "[bold yellow]Step 2/2[/] — [yellow]Claude[/] performing deep forensic analysis on matched packets…",
+        border_style="yellow", expand=False
+    ))
+
+    packet_context = ""
+    if matched_packets:
+        packet_context = (
+            f"\n\nThe following {len(matched_packets)} packets were retrieved by Gemini's filter "
+            f"and are the focus of your deep analysis:\n"
+            f"{_format_packets_for_claude(matched_packets, parser)}\n"
+        )
+
+    claude_prompt = (
+        f"The user asked: {query}\n\n"
+        f"Gemini's initial overview:\n{gemini_text}\n"
+        f"{packet_context}\n"
+        "Based on the above, provide a detailed expert forensic security analysis. "
+        "Identify any malicious patterns, credential exposure, anomalous behaviours, "
+        "attack vectors, or data exfiltration indicators. Use structured Markdown with "
+        "clear headings, bullet points, and a final risk summary."
+    )
+
+    with console.status("[yellow]Claude performing forensic deep-dive…", spinner="dots"):
+        claude_text, _ = query_claude(claude_key, parser, claude_prompt)
+
+    if claude_text:
+        console.print(Panel(
+            claude_text,
+            title="[magenta]⚡ AuraSniff Ensemble — Claude Forensic Report[/]",
+            border_style="magenta"
+        ))
+    else:
+        console.print("[bold red]Claude analysis failed.[/] Gemini overview above is your final result.")
+
+    # Still show the filtered packet list for reference
+    if matched_packets:
+        console.print(f"[dim]Matched packets ({min(50, len(matched_packets))} of {len(matched_packets)}):[/]")
+        terminal_ui.render_packets_list(matched_packets[:50], parser)
+
 def handle_query(parser, query):
     provider, api_key = get_active_provider()
 
@@ -465,10 +613,15 @@ def handle_query(parser, query):
         run_local_fallback_query(parser, query)
         return
 
+    # Route to ensemble pipeline if both keys are available
+    if provider == "ensemble":
+        handle_ensemble_query(parser, query)
+        return
+
     p_display = _PROVIDER_DISPLAY.get(provider, provider.title())
     query_fn  = _PROVIDER_QUERY_FN.get(provider, query_gemini)
 
-    with console.status(f"[cyan]Asking {p_display}...", spinner="dots"):
+    with console.status(f"[cyan]Asking {p_display}…", spinner="dots"):
         explanation, filter_dict = query_fn(api_key, parser, query)
 
     if explanation:
@@ -484,7 +637,7 @@ def handle_query(parser, query):
             else:
                 console.print("[yellow]No packets matched the AI-recommended filter criteria.[/]")
     else:
-        console.print(f"[bold red]Failed to get a response from {p_display}.[/] Running local fallback...")
+        console.print(f"[bold red]Failed to get a response from {p_display}.[/] Running local fallback…")
         run_local_fallback_query(parser, query)
 
 
@@ -617,8 +770,8 @@ def main():
     set_prov_parser = config_sub.add_parser("set-provider", help="Set the default AI provider")
     set_prov_parser.add_argument(
         "provider",
-        choices=["gemini", "claude", "openai"],
-        help="Provider to use by default"
+        choices=["gemini", "claude", "openai", "ensemble", "auto"],
+        help="Provider to use by default. 'ensemble' chains Gemini+Claude. 'auto' picks the best available."
     )
 
     config_sub.add_parser("show", help="Show all configured keys and the active provider")

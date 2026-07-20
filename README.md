@@ -2,7 +2,7 @@
 
 
 <p align="center">
-  <b>A premium, interactive terminal-based network packet capture (PCAP) analyzer with built-in Gemini AI assistance.</b>
+  <b>A premium, interactive terminal-based network packet analyzer with Gemini, Claude, and ⚡ Dual-LLM Ensemble Mode.</b>
 </p>
 
 <p align="center">
@@ -30,7 +30,8 @@
   * **ARP Spoofing**: Detects multiple MAC addresses claiming the same IP.
   * **DNS Tunneling**: Flags abnormally long, high-entropy query names (indicative of C2/Exfiltration).
   * **Cleartext passwords**: Warns about insecure login transmissions.
-* **💬 Gemini AI Chat REPL**: Launch an interactive shell to ask questions like *"Who is scanning ports?"*, *"What websites did 192.168.1.15 visit?"*, or *"Are there any suspicious hosts?"*. Gemini translates your questions into local search filters and answers in markdown.
+* **🤖 Multi-Provider AI**: Supports **Gemini**, **Claude**, and **GPT-4o**. Set one key for single-model mode, or set both Gemini and Claude keys to automatically unlock the beast — **⚡ Ensemble Mode**.
+* **⚡ Dual-LLM Ensemble Mode** *(Gemini + Claude)*: The most powerful mode. Gemini rapidly scans the entire capture and extracts a smart packet filter. Claude then performs a **deep forensic analysis** on exactly those matched packets — delivering expert threat intelligence, attack vector analysis, and a structured risk report.
 * **🔍 Deep Hex Inspection**: Drill into individual packets to view a structured layer tree (Ethernet → IP → TCP → Payload) alongside a color-coded Hex & ASCII dump.
 * **🧠 Smart Offline Fallback**: No API key? The tool still intelligently routes natural language queries to the right view — credentials, alerts, websites, DNS, HTTP, or raw packet filter.
 
@@ -88,14 +89,9 @@ Packet #42
 
 ## ⚙️ Installation
 
-Install the base package (includes Gemini AI support):
+Install the base package (includes Gemini + Claude for Ensemble Mode):
 ```bash
 pip install aurasniff
-```
-
-Add Claude (Anthropic) support:
-```bash
-pip install aurasniff[claude]
 ```
 
 Add OpenAI GPT-4o support:
@@ -109,6 +105,67 @@ pip install aurasniff[all]
 ```
 
 ---
+
+## ⚡ Dual-LLM Ensemble Mode
+
+The most powerful way to use AuraSniff. When you provide **both** a Gemini and a Claude API key, the tool **automatically activates Ensemble Mode** — no extra configuration needed.
+
+### How it works
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Your Question: "Is there any suspicious traffic on 10.0.0.15?" │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+        ┌──────────▼────────────┐
+        │  Step 1 — Gemini      │  Fast scan of the full PCAP summary.
+        │  (Full Capture Scan)  │  Generates a smart packet filter + overview.
+        └──────────┬────────────┘
+                   │  filter: { "src": "10.0.0.15" }
+        ┌──────────▼────────────┐
+        │  Local Engine         │  Applies filter to the raw packet database.
+        │  (Packet Retrieval)   │  Returns exact matching packets + metadata.
+        └──────────┬────────────┘
+                   │  37 packets matched
+        ┌──────────▼────────────┐
+        │  Step 2 — Claude      │  Deep forensic analysis on matched packets.
+        │  (Forensic Analyst)   │  Returns structured risk report in Markdown.
+        └───────────────────────┘
+```
+
+### Setup
+
+```bash
+# Step 1 — Save your Gemini key
+aurasniff config set-key <GEMINI_API_KEY>
+
+# Step 2 — Save your Claude key
+aurasniff config set-key <CLAUDE_API_KEY> --provider claude
+
+# That's it! Ensemble Mode activates automatically.
+# Verify with:
+aurasniff config show
+```
+
+You will see:
+```
+AuraSniff — AI Provider Config
+  Active provider : Gemini ⚡ Claude Ensemble
+  gemini  : AIza••••••••••••  (keychain)
+  claude  : sk-an••••••••••••  (keychain)
+```
+
+### Force a single provider (optional)
+```bash
+# Use only Gemini
+aurasniff config set-provider gemini
+
+# Use only Claude
+aurasniff config set-provider claude
+
+# Restore auto-detect (activates Ensemble if both keys exist)
+aurasniff config set-provider auto
+```
 
 ## 🛠️ Usage Guide
 
@@ -154,38 +211,46 @@ Run a single natural language question directly from your terminal:
 aurasniff query <path_to_file.pcap> "which websites did each IP visit?"
 ```
 
-### 4. Configure Gemini API Key
-To enable AI capabilities, save your API key (stored securely in the OS keychain):
+### 4. Configure AI Keys
+Keys are stored securely in the **OS keychain** (Windows Credential Manager / macOS Keychain / Linux Secret Service). They are never written to disk in plain text. Environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are also supported for CI/CD.
+
 ```bash
-# Gemini (included by default)
+# Gemini key (always recommended — used in both solo and Ensemble Mode)
 aurasniff config set-key <GEMINI_KEY>
 
-# Claude (requires pip install aurasniff[claude])
+# Claude key — adding this automatically activates ⚡ Ensemble Mode
 aurasniff config set-key <CLAUDE_KEY> --provider claude
 
-# OpenAI GPT-4o (requires pip install aurasniff[openai])
+# OpenAI GPT-4o (optional alternative)
 aurasniff config set-key <OPENAI_KEY> --provider openai
 
-# Switch the active provider
-aurasniff config set-provider claude
-
-# View all configured keys
+# View all configured keys and active mode
 aurasniff config show
+
+# Force a specific provider (optional)
+aurasniff config set-provider gemini     # Gemini only
+aurasniff config set-provider claude     # Claude only
+aurasniff config set-provider ensemble   # Force Ensemble
+aurasniff config set-provider auto       # Auto-detect (default)
 ```
-> **Security:** Keys are stored in the **OS keychain** (Windows Credential Manager / macOS Keychain / Linux Secret Service), never written to disk in plain text. Environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are also supported for CI/CD use.
 
 ---
 
 ## 📋 Changelog
 
-### v0.1.4 — Latest
+### v0.1.5 — Latest
+**Dual-LLM Ensemble Mode ⚡**
+- 🤖 **Auto Ensemble Mode**: Provide both a Gemini and Claude key and the tool automatically chains both models for maximum analytical power — no extra configuration needed.
+- 🔬 **Gemini → Filter → Claude pipeline**: Gemini fast-scans the full capture and generates a precise packet filter. Claude then performs deep forensic analysis on the exact matched packets.
+- 🎨 **Ensemble prompt indicator**: Shell prompt now shows `[Gemini ⚡ Claude Ensemble]` when both keys are active.
+- 📦 `anthropic` added to core dependencies (no longer optional).
+
+### v0.1.4
 **New Features**
 - 🤖 **Multi-provider AI**: Claude (`claude-3-5-haiku`) and GPT-4o (`gpt-4o-mini`) supported alongside Gemini
 - 🔐 **Secure key storage**: API keys stored in OS keychain via `keyring` — never written to disk in plain text
 - 🔁 **Auto-fallback**: If default provider key is missing, automatically switches to next available provider
 - 🎨 **Dynamic shell prompt**: Shows active provider `[Gemini]` / `[Claude]` / `[GPT-4o]` / `[Offline]`
-- 📦 **Optional extras**: `pip install aurasniff[claude]`, `[openai]`, `[all]` — lighter default install
-- ⚙️ New config commands: `set-key --provider`, `set-provider`, enhanced `show`
 
 ### v0.1.3
 - 🌐 IP → Website Map, `websites` shell command, 7 bug fixes
@@ -197,9 +262,9 @@ aurasniff config show
 
 ## 🔒 Security & Privacy Disclosures
 
-1. **Local Processing**: AuraSniff performs all packet parsing, dissection, database storage, and filtering **locally on your machine**. 
-2. **Minified Context**: When utilizing the Gemini AI features, AuraSniff **does not upload your raw binary PCAP file**. Instead, it generates a minified text-based summary of metadata (hostnames, domain lookups, connection metrics, and alert titles) and sends only this summary alongside your prompt to the Gemini API. Your actual packet payloads remain 100% private.
-3. **The HTTPS Limitation**: Like any passive packet sniffer, AuraSniff **cannot decrypt TLS/HTTPS traffic** (Port 443) without session keys. If you log in to a secure website like GitHub, the credentials will be encrypted before hitting the network interface. To test credential sniffing, capture traffic on unencrypted services (e.g., local development servers running HTTP, legacy router dashboards, or raw FTP).
+1. **Local Processing**: AuraSniff performs all packet parsing, dissection, database storage, and filtering **locally on your machine**.
+2. **Minified Context for AI**: AuraSniff **does not upload your raw binary PCAP file** to any AI provider. It sends only a structured text summary of metadata (hostnames, domain lookups, connection metrics, alert titles, and credential notices). In Ensemble Mode, Claude receives the text representation of filtered packets — **never raw binary payloads**. Your actual packet data stays 100% local.
+3. **The HTTPS Limitation**: Like any passive packet sniffer, AuraSniff **cannot decrypt TLS/HTTPS traffic** (Port 443) without session keys. To test credential sniffing, capture traffic on unencrypted services (e.g., local HTTP dev servers, legacy router dashboards, or raw FTP).
 
 ---
 
