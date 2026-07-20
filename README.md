@@ -148,6 +148,54 @@ pip install aurasniff[all]
 
 ---
 
+## 🐉 Kali Linux / Debian / Ubuntu Installation
+
+Newer versions of Kali Linux, Debian, and Ubuntu protect the system Python from `pip` (PEP 668). If you see this error:
+
+```
+error: externally-managed-environment
+× This environment is externally managed
+```
+
+Use one of these fixes:
+
+### ✅ Option 1 — pipx (Recommended for CLI tools)
+
+`pipx` installs CLI tools in isolated environments and makes them globally available — the perfect fit for AuraSniff:
+
+```bash
+sudo apt install pipx -y
+pipx ensurepath
+source ~/.bashrc   # or open a new terminal
+pipx install aurasniff
+```
+
+Done. Run `aurasniff --help` from anywhere.
+
+### ✅ Option 2 — Virtual Environment
+
+```bash
+python3 -m venv ~/aurasniff-env
+source ~/aurasniff-env/bin/activate
+pip install aurasniff
+aurasniff --help
+```
+
+To use it in future sessions:
+```bash
+source ~/aurasniff-env/bin/activate
+```
+
+### ✅ Option 3 — Force Install (Quick)
+
+```bash
+pip install aurasniff --break-system-packages
+```
+
+> ⚠️ Bypasses system package protection. Fine for personal machines, not recommended on production servers.
+
+---
+
 ## 🛠️ Usage
 
 ### Open a file instantly (recommended)
